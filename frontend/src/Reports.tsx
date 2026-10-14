@@ -1,0 +1,34 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { Download, Printer, RefreshCw } from 'lucide-react';
+import { api } from './api';
+import { can, useAuth } from './access';
+import { Busy, Denied, ErrorBox, IconButton, QueryError } from './ui';
+import { StockTable } from './Warehouse';
+import { saveBlob } from './Files';
+import { cairoToday, minutes } from './Shifts';
+
+type Row = { id: string; code: string; title: string; machineSerial: string; status: string; deliveryAt: string; assemblyCompletedAt: string | null; completedAt: string | null; deliveredAt: string | null; required: number; installed: number; missing: number; defects: number; expectedMinutes: number; time: { grossSeconds: number; netSeconds: number | null }; untrackedTasks: number; assemblyLate: boolean; completionLate: boolean; deliveryLate: boolean };
+type Report = { total: number; active: number; ready: number; rework: number; completed: number; delivered: number; completionLate: number; deliveryLate: number; missing: number; defects: number; orders: Row[] };
+const states: Record<string, string> = { DRAFT: 'مسودة', OPEN: 'مفتوح', IN_PROGRESS: 'قيد التجميع', AWAITING_TESTING: 'جاهز للتجربة', TESTING: 'تجربة جارية', REWORK: 'معالجة', COMPLETED: 'مكتمل', CANCELLED: 'ملغي' };
+const date = (v: string | null) => v ? new Intl.DateTimeFormat('ar-EG', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Cairo' }).format(new Date(v)) : '—';
+export function ReportsPage() {
+  const { user } = useAuth(); const today = cairoToday(); const [from, setFrom] = useState(`${today.slice(0, 7)}-01`), [to, setTo] = useState(new Date(new Date(today + 'T00:00:00Z').getTime() + 90 * 86400000).toISOString().slice(0, 10)), [state, setState] = useState('all'), [error, setError] = useState<unknown>(null), [pending, setPending] = useState(false);
+  const [search, setSearch] = useState('');
+  const parameters = new URLSearchParams({ from, to, q: search, status: ['all', 'late', 'missing'].includes(state) ? '' : state, late: String(state === 'late'), missing: String(state === 'missing') }).toString();
+  const query = useQuery({ queryKey: ['reports', parameters], queryFn: () => api<Report>(`/reports?${parameters}`), placeholderData: previous => previous, enabled: can(user, 'reports.view') && !!from && !!to && from <= to, refetchInterval: 15000 });
+  if (!can(user, 'reports.view')) return <Denied />; const r = query.data, rows = query.isPlaceholderData ? [] : r?.orders ?? [];
+  return <div className="report-page"><div className="page-heading"><div><div className="eyebrow">متابعة المدير</div><h1>متابعة المصنع والتقارير</h1></div><div className="bom-actions"><IconButton label="تحديث التقرير" onClick={() => void query.refetch()} disabled={query.isFetching}><RefreshCw size={18} /></IconButton>{can(user, 'reports.export') && <><button disabled={!r || pending || query.isFetching || !from || !to || from > to} onClick={async () => { setPending(true); setError(null); try { saveBlob(await api<Blob>(`/reports/export?${parameters}`, 'GET', undefined, true), `EasyPack-${from}-${to}.csv`); } catch (e) { setError(e); } finally { setPending(false); } }}><Download size={17} />تصدير CSV</button><IconButton label="طباعة التقرير" disabled={!r || query.isFetching || !from || !to || from > to} onClick={() => window.print()}><Printer size={18} /></IconButton></>}</div></div>
+    <div className="toolbar report-filters"><label>موعد التسليم من<input aria-label="موعد التسليم من" type="date" value={from} max={to} required onChange={e => setFrom(e.target.value)} /></label><label>موعد التسليم إلى<input aria-label="موعد التسليم إلى" type="date" value={to} min={from} required onChange={e => setTo(e.target.value)} /></label></div><ErrorBox error={error} />{(!from || !to || from > to) && <div className="error">راجع فترة التقرير</div>}
+    {query.isPending ? <Busy /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : r && <><dl className="report-metrics">{[['إجمالي الطلبات', r.total], ['قيد التنفيذ', r.active], ['جاهز للتجربة', r.ready], ['معالجة', r.rework], ['مكتمل', r.completed], ['تم التسليم', r.delivered], ['اكتمال متأخر', r.completionLate], ['تسليم متأخر', r.deliveryLate], ['نقص قطع', r.missing], ['عيوب مفتوحة', r.defects]].map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}</dl>
+      <div className="report-screen"><StockTable rows={rows} searchValue={search} onSearchChange={setSearch} searchText={o => `${o.code} ${o.title} ${o.machineSerial}`} filters={<select aria-label="تصفية التقرير" value={state} onChange={e => setState(e.target.value)}><option value="all">كل الطلبات</option><option value="late">تأخر اكتمال الطلب</option><option value="missing">به نقص</option>{Object.entries(states).map(([v, n]) => <option key={v} value={v}>{n}</option>)}</select>} columns={[
+        { label: 'الطلب / الماكينة', cell: o => <>{can(user, 'orders.view') ? <Link className="inline-link" to={`/orders/${o.id}`}>{o.title}</Link> : <strong>{o.title}</strong>}<span className="record-code" dir="ltr">{o.code} · {o.machineSerial}</span></> },
+        { label: 'الحالة / التجميع', cell: o => <><span className={`badge ${o.status === 'COMPLETED' ? 'active' : ['REWORK', 'CANCELLED'].includes(o.status) ? 'inactive' : 'draft'}`}>{states[o.status]}</span><span className="record-code">{o.installed} / {o.required} قطعة</span></> },
+        { label: 'النقص / العيوب', cell: o => <>{o.missing} قطعة ناقصة<span className="record-code">{o.defects} بلاغ مفتوح</span></> },
+        { label: 'زمن التركيب', cell: o => <>المتوقع: {o.expectedMinutes} دقيقة<span className="record-code">داخل الوردية: {minutes(o.time.grossSeconds)}</span><span className="record-code">الصافي: {minutes(o.time.netSeconds)}</span>{o.untrackedTasks > 0 && <span className="field-error">{o.untrackedTasks} مهمة بسجل وقت غير مكتمل</span>}</> },
+        { label: 'التسليم · القاهرة', cell: o => <>{date(o.deliveryAt)}<span className="record-code">اكتمال: {date(o.completedAt)}</span><span className="record-code">تسليم فعلي: {date(o.deliveredAt)}</span>{o.completionLate && <span className="field-error">اكتمال متأخر</span>}{o.deliveryLate && <span className="field-error">تسليم متأخر</span>}</> },
+      ]} /></div><div className="report-print-only"><h2>طلبات الفترة {from} إلى {to}</h2><table><thead><tr><th>الكود</th><th>الماكينة</th><th>الحالة</th><th>التجميع</th><th>النقص</th><th>العيوب</th><th>دقيقة صافي</th><th>التسليم</th><th>اكتمال</th></tr></thead><tbody>{rows.map(o => <tr key={o.id}><td>{o.code}</td><td>{o.machineSerial}</td><td>{states[o.status]}</td><td>{o.installed}/{o.required}</td><td>{o.missing}</td><td>{o.defects}</td><td>{minutes(o.time.netSeconds)}</td><td>{date(o.deliveryAt)}</td><td>{date(o.completedAt)}</td></tr>)}</tbody></table></div>
+    </>}
+  </div>;
+}

@@ -1,0 +1,36 @@
+name: easypack-public-demo
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: easypack_demo
+      POSTGRES_USER: easypack_demo
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Run scripts/Initialize-Demo.ps1}
+    volumes:
+      - demo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U easypack_demo -d easypack_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.Railway
+    environment:
+      SPRING_PROFILES_ACTIVE: railway,demo
+      DB_URL: jdbc:postgresql://postgres:5432/easypack_demo
+      DB_USER: easypack_demo
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Run scripts/Initialize-Demo.ps1}
+      ALLOWED_ORIGINS: http://localhost:${DEMO_PORT:-18090},http://127.0.0.1:${DEMO_PORT:-18090}
+      # Local HTTP only. Railway keeps secure cookies enabled by its profile.
+      EASYBACK_SECURE_COOKIES: "false"
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-18090}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  demo_pgdata:
