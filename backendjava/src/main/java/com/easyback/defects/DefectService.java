@@ -5,6 +5,7 @@ import com.easyback.assembly.AssemblyData.Removal;
 import com.easyback.assembly.AssemblyService;
 import com.easyback.warehouse.StockService;
 import com.easyback.identity.ApiException;
+import com.easyback.notifications.NotificationWriter;
 import java.util.*;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -17,7 +18,8 @@ public class DefectService {
     private final JdbcClient db;
     private final AssemblyService assembly;
     private final StockService stock;
-    public DefectService(JdbcClient db,AssemblyService assembly,StockService stock) { this.db=db; this.assembly=assembly; this.stock=stock; }
+    private final NotificationWriter notifications;
+    public DefectService(JdbcClient db,AssemblyService assembly,StockService stock,NotificationWriter notifications) { this.db=db; this.assembly=assembly; this.stock=stock; this.notifications=notifications; }
     private static void rule(boolean valid,String code) { if(!valid) throw new ApiException(409,code,"Defect operation is not allowed."); }
     private static ApiException missing() { return new ApiException(404,"NOT_FOUND","Defect not found."); }
     private void guard() {
@@ -54,7 +56,8 @@ public class DefectService {
         guard(); var t=assembly.reject(task,p,actor,all).task(); UUID id=UUID.randomUUID();
         db.sql("INSERT INTO defect_cases(id,task_id,piece_id,reported_by,reason) VALUES (:id,:task,:piece,:actor,:reason)")
             .param("id",id).param("task",task).param("piece",t.pieceId()).param("actor",actor).param("reason",p.reason().trim()).update();
-        event(id,"REPORTED",actor,p.reason()); stock.defectReceived(t.orderId()); return detail(id,actor,true);
+        event(id,"REPORTED",actor,p.reason()); stock.defectReceived(t.orderId(),actor);
+        notifications.emit(NotificationWriter.Kind.DEFECT_REPORTED,t.orderId(),id,"reported",actor); return detail(id,actor,true);
     }
     private Case editable(UUID id,long version) { var d=load(id); rule(d.version()==version,"STALE_VERSION"); return d; }
     private void transition(Case d,String state,String pieceState,String action,String movement,UUID actor,String notes,String location) {
@@ -71,7 +74,8 @@ public class DefectService {
         assembly.returned(d.taskId(),d.pieceId(),actor,p.notes());
         db.sql("UPDATE stock_pieces SET requirement_id=NULL,recipient_id=NULL,task_id=NULL,status='QUARANTINED' WHERE id=:id").param("id",d.pieceId()).update();
         transition(d,"QUARANTINED","QUARANTINED","RECEIVED","DEFECT_RECEIVED",actor,p.notes(),p.location().trim());
-        stock.defectReceived(d.orderId()); return detail(id,actor,true);
+        stock.defectReceived(d.orderId(),actor);
+        notifications.emit(NotificationWriter.Kind.DEFECT_RECEIVED,d.orderId(),id,Long.toString(d.version()+1),actor); return detail(id,actor,true);
     }
     @Transactional
     public Detail start(UUID id,Action p,UUID actor) {
@@ -81,7 +85,8 @@ public class DefectService {
     @Transactional
     public Detail finish(UUID id,Action p,UUID actor) {
         guard(); var d=editable(id,p.version()); rule(d.status().equals("IN_REPAIR") && d.pieceStatus().equals("IN_REPAIR"),"DEFECT_STATE_INVALID");
-        transition(d,"REPAIRED","REPAIRED","REPAIR_COMPLETED","REPAIR_COMPLETED",actor,p.notes(),null); return detail(id,actor,true);
+        transition(d,"REPAIRED","REPAIRED","REPAIR_COMPLETED","REPAIR_COMPLETED",actor,p.notes(),null);
+        notifications.emit(NotificationWriter.Kind.REPAIR_COMPLETED,d.orderId(),id,Long.toString(d.version()+1),actor); return detail(id,actor,true);
     }
     @Transactional
     public Detail accept(UUID id,Receipt p,UUID actor) {

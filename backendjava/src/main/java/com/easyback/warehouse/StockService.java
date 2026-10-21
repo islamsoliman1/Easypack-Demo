@@ -4,6 +4,7 @@ import static com.easyback.warehouse.StockData.*;
 import com.easyback.identity.ApiException;
 import com.easyback.identity.IdentityStore;
 import com.easyback.assembly.AssemblyService;
+import com.easyback.notifications.NotificationWriter;
 import java.sql.Types;
 import java.util.*;
 import org.springframework.jdbc.core.RowMapper;
@@ -17,7 +18,8 @@ public class StockService {
     private final JdbcClient db;
     private final IdentityStore identity;
     private final AssemblyService assembly;
-    public StockService(JdbcClient db, IdentityStore identity,AssemblyService assembly) { this.db=db; this.identity=identity; this.assembly=assembly; }
+    private final NotificationWriter notifications;
+    public StockService(JdbcClient db, IdentityStore identity,AssemblyService assembly,NotificationWriter notifications) { this.db=db; this.identity=identity; this.assembly=assembly; this.notifications=notifications; }
     private static void rule(boolean valid,String code) { if (!valid) throw new ApiException(409,code,"Stock operation is not allowed."); }
     private static ApiException missing() { return new ApiException(404,"NOT_FOUND","Record not found."); }
     private void guard() {
@@ -97,11 +99,14 @@ public class StockService {
         }
         audit(actor,"STOCK_RECEIVED",p.partId()); return result;
     }
-    private void syncPreparation(UUID order) {
+    private void syncPreparation(UUID order,UUID actor) {
         for (var r:coverage(order)) if (r.preparationId()!=null) {
             String next=r.missing()==0 ? "FULFILLED" : r.preparationStatus().equals("FULFILLED") ? "REQUESTED" : r.preparationStatus();
-            if (!next.equals(r.preparationStatus())) db.sql("UPDATE preparation_requests SET status=:status,version=version+1 WHERE id=:id")
+            if (!next.equals(r.preparationStatus())) {
+                db.sql("UPDATE preparation_requests SET status=:status,version=version+1 WHERE id=:id")
                 .param("id",r.preparationId()).param("status",next).update();
+                notifications.preparation(order,r.preparationId(),next,actor);
+            }
         }
     }
     @Transactional
@@ -118,7 +123,7 @@ public class StockService {
                 movement(id,"RESERVED",r.requirementId(),null,actor,"","");
             }
         }
-        syncPreparation(order);
+        syncPreparation(order,actor);
     }
     @Transactional
     public OrderStock reserve(UUID order,long version,UUID actor) {
@@ -151,7 +156,7 @@ public class StockService {
         db.sql("UPDATE stock_pieces SET status=:status,requirement_id=NULL,recipient_id=NULL,task_id=NULL,version=version+1 WHERE id=:id")
             .param("id",id).param("status",status).update();
         movement(id,p.condition()==Condition.GOOD ? "RETURNED_GOOD" : "RETURNED_DEFECTIVE",piece.requirementId(),null,actor,"",p.notes());
-        syncPreparation(order); touch(order); audit(actor,"STOCK_RETURNED",order); return orderStock(order,actor,true);
+        syncPreparation(order,actor); touch(order); audit(actor,"STOCK_RETURNED",order); return orderStock(order,actor,true);
     }
     @Transactional
     public Piece restore(UUID id,RestoreInput p,UUID actor) {
@@ -185,6 +190,8 @@ public class StockService {
             .param("id",UUID.randomUUID()).param("req",p.requirementId()).param("qty",r.missing()).param("notes",p.notes().trim()).param("actor",actor).update();
         else db.sql("UPDATE preparation_requests SET requested_quantity=:qty,status='REQUESTED',notes=:notes,requested_by=:actor,requested_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=:id")
             .param("id",r.preparationId()).param("qty",r.missing()).param("notes",p.notes().trim()).param("actor",actor).update();
+        UUID prep=db.sql("SELECT id FROM preparation_requests WHERE requirement_id=:id").param("id",p.requirementId()).query(UUID.class).single();
+        notifications.preparation(order,prep,"REQUESTED",actor);
         touch(order); audit(actor,"PREPARATION_REQUESTED",order); return orderStock(order,actor,true);
     }
     public List<Preparation> preparations() {
@@ -215,7 +222,7 @@ public class StockService {
                 r.getString("position_code"),r.getString("recipient_name"),r.getString("actor_name"),r.getString("reference"),r.getString("notes"),r.getTimestamp("created_at").toInstant())).list();
     }
     @Transactional
-    public void defectReceived(UUID order) { guard(); syncPreparation(order); touch(order); }
+    public void defectReceived(UUID order,UUID actor) { guard(); syncPreparation(order,actor); touch(order); }
     @Transactional
     public void acceptCut(UUID requirement,List<UUID> pieces,UUID actor) {
         guard();
@@ -225,6 +232,6 @@ public class StockService {
             movement(id,"RESERVED",requirement,null,actor,"","Cut output allocated to its preparation request");
         }
         UUID order=db.sql("SELECT order_id FROM order_requirements WHERE id=:id").param("id",requirement).query(UUID.class).single();
-        syncPreparation(order); touch(order);
+        syncPreparation(order,actor); touch(order);
     }
 }

@@ -242,3 +242,20 @@ legend { padding-inline-end: 12px; font-size: 13px; font-weight: 600; }
 .demo-label { font-weight: 700; }
 [data-theme="dark"] .demo-banner { background: #302715; color: #fde68a; border-color: #886621; }
 @media print { .demo-banner { display: none; } }
+
+.notification-bell { position: relative; }
+.notification-bell > .icon-button { position: relative; }
+.notification-count { position: absolute; inset-block-start: -5px; inset-inline-end: -7px; border-radius: 12px; min-width: 19px; padding: 1px 4px; font-size: 10px; background: var(--brand-text); color: var(--surface); }
+.notification-popover { position: absolute; inset-inline-end: 0; inset-block-start: calc(100% + 12px); z-index: 30; width: min(400px, calc(100vw - 32px)); max-height: min(660px, 80vh); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 40px #0003; }
+.notification-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.notification-heading h2 { font-size: 18px; margin: 0; }
+.notification-shared { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.notification-items { margin: 12px 0; padding: 0; list-style: none; }
+.notification-items > li { padding: 12px; border-block-end: 1px solid var(--line); border-inline-start: 3px solid transparent; }
+.notification-items > li.notification-unread { border-inline-start-color: var(--brand-text); background: var(--line-subtle); }
+.notification-items a { display: flex; flex-wrap: wrap; gap: 7px; color: var(--text); text-decoration: none; }
+.notification-items strong, .notification-items a > span:not(.badge):not(.notification-sample), .notification-items time, .notification-items small { flex-basis: 100%; }
+.notification-items time, .notification-items small, .notification-sample { color: var(--muted); font-size: 11px; }
+.notification-items .quiet { margin-block-start: 8px; }
+.notification-urgent { color: var(--danger); } .notification-retry { font-size: 11px; }
+@media (max-width: 600px) { .notification-popover { position: fixed; inset-inline: 16px; inset-block-start: 68px; width: auto; } .topbar .account-name { display: none; } }

@@ -47,11 +47,11 @@ public class FileService {
     private Metadata map(ResultSet r,boolean manage) throws SQLException { return new Metadata(r.getObject("id",UUID.class),Kind.valueOf(r.getString("target_kind")),r.getObject("target_id",UUID.class),r.getString("filename"),r.getString("content_type"),r.getInt("size_bytes"),r.getLong("version"),r.getString("display_name"),r.getTimestamp("uploaded_at").toInstant(),manage); }
     public List<Metadata> list(Kind kind,UUID id,UUID actor) {
         boolean manage=access(kind,id,actor);
-        return db.sql("SELECT f.*,u.display_name FROM resource_files f JOIN users u ON u.id=f.uploaded_by WHERE target_kind=:kind AND target_id=:id AND NOT deleted ORDER BY uploaded_at DESC,f.id")
+        return db.sql("SELECT f.id,f.target_kind,f.target_id,f.filename,f.content_type,f.size_bytes,f.version,f.uploaded_at,u.display_name FROM resource_files f JOIN users u ON u.id=f.uploaded_by WHERE target_kind=:kind AND target_id=:id AND NOT deleted ORDER BY uploaded_at DESC,f.id")
             .param("kind",kind.name()).param("id",id).query((r,n)->map(r,manage)).list();
     }
     private Metadata metadata(UUID id,UUID actor) {
-        var f=db.sql("SELECT f.*,u.display_name FROM resource_files f JOIN users u ON u.id=f.uploaded_by WHERE f.id=:id AND NOT deleted").param("id",id).query((r,n)->map(r,false)).optional().orElseThrow(FileService::missing);
+        var f=db.sql("SELECT f.id,f.target_kind,f.target_id,f.filename,f.content_type,f.size_bytes,f.version,f.uploaded_at,u.display_name FROM resource_files f JOIN users u ON u.id=f.uploaded_by WHERE f.id=:id AND NOT deleted").param("id",id).query((r,n)->map(r,false)).optional().orElseThrow(FileService::missing);
         boolean manage=access(f.targetKind(),f.targetId(),actor); return new Metadata(f.id(),f.targetKind(),f.targetId(),f.filename(),f.contentType(),f.sizeBytes(),f.version(),f.uploadedBy(),f.uploadedAt(),manage);
     }
     public Content download(UUID id,UUID actor) {

@@ -4,6 +4,10 @@ import { CircleAlert, LoaderCircle, RefreshCw, ShieldCheck, X } from 'lucide-rea
 import { ApiError } from './api';
 
 const errors: Record<string, string> = {
+  INVALID_NOTIFICATION_QUERY: 'عامل تصفية الإشعارات أو مؤشر الصفحة غير صالح.',
+  UNKNOWN_PERMISSION: 'إحدى الصلاحيات المحددة غير معروفة.',
+  INVALID_ROLE: 'أحد الأدوار المحددة غير موجود.',
+  EMAIL_IMMUTABLE: 'لا يمكن تغيير البريد الإلكتروني بعد الإنشاء.',
   DEMO_STARTING: 'جارٍ تجهيز بيانات الديمو. حاول مجددًا بعد قليل.',
   DEMO_UNAVAILABLE: 'الديمو غير متاح حاليًا. حاول إعادة التحميل.',
   DEMO_BUSY: 'الديمو مشغول حاليًا. حاول مجددًا بعد قليل.',

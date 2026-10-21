@@ -7,6 +7,7 @@ import com.easyback.identity.ApiException;
 import com.easyback.identity.IdentityStore;
 import com.easyback.warehouse.StockService;
 import com.easyback.assembly.AssemblyService;
+import com.easyback.notifications.NotificationWriter;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -22,8 +23,9 @@ public class OrderService {
     private final IdentityStore identity;
     private final StockService stock;
     private final AssemblyService assembly;
-    public OrderService(JdbcClient db, CatalogService catalog, IdentityStore identity, StockService stock,AssemblyService assembly) {
-        this.db=db; this.catalog=catalog; this.identity=identity; this.stock=stock; this.assembly=assembly;
+    private final NotificationWriter notifications;
+    public OrderService(JdbcClient db, CatalogService catalog, IdentityStore identity, StockService stock,AssemblyService assembly,NotificationWriter notifications) {
+        this.db=db; this.catalog=catalog; this.identity=identity; this.stock=stock; this.assembly=assembly; this.notifications=notifications;
     }
     private static void rule(boolean valid, String code) {
         if (!valid) throw new ApiException(409, code, "The requested order change is not allowed.");
@@ -135,6 +137,8 @@ public class OrderService {
         db.sql("UPDATE manufacturing_orders SET status='OPEN',opened_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=:id").param("id",id).update();
         stock.allocateOnRelease(id,actor);
         assembly.createTasks(id);
+        notifications.emit(NotificationWriter.Kind.ORDER_RELEASED,id,null,"release",actor);
+        if(stock.orderStock(id,actor,true).requirements().stream().anyMatch(r->r.missing()>0)) notifications.emit(NotificationWriter.Kind.ORDER_SHORTAGE,id,null,"release",actor);
         audit(actor,"ORDER_OPENED",id); return load(id);
     }
     @Transactional

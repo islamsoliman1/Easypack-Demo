@@ -26,12 +26,14 @@ const running = (t: Task) => (t as Task & { workRunning: boolean }).workRunning;
 function State({ value }: { value: string }) { return <span className={`badge ${value === 'INSTALLED' ? 'active' : 'draft'}`}>{states[value]}</span>; }
 
 export function TasksPage() {
-  const { user } = useAuth(); const client = useQueryClient(); const [params] = useSearchParams();
+  const { user } = useAuth(); const client = useQueryClient(); const [params, setParams] = useSearchParams();
   const all = can(user, 'tasks.view') && can(user, 'orders.view'), allowed = all || can(user, 'tasks.view-assigned');
   const order = params.get('order'), assign = all && can(user, 'tasks.assign');
   const query = useQuery({ queryKey: ['assembly', 'tasks', order], queryFn: () => api<Task[]>(`${root}${order ? `?orderId=${encodeURIComponent(order)}` : ''}`), enabled: allowed });
   const workers = useQuery({ queryKey: ['assembly', 'workers'], queryFn: () => api<Person[]>('/assembly/workers'), enabled: assign });
-  const [status, setStatus] = useState('all'), [workerFilter, setWorkerFilter] = useState('all'), [detail, setDetail] = useState<string | null>(null);
+  const [status, setStatus] = useState('all'), [workerFilter, setWorkerFilter] = useState('all');
+  const detail = params.get('task');
+  const setDetail = (id: string | null) => { const next = new URLSearchParams(params); if (id) next.set('task', id); else next.delete('task'); setParams(next); };
   const [action, setAction] = useState<{ kind: ActionKind; task: Task } | null>(null), [notice, setNotice] = useState('');
   if (!allowed) return <Denied />;
   return <div className="assembly-tasks">{order && all && <Link className="inline-link" to={`/orders/${order}`}><ArrowRight size={17} />طلب التصنيع</Link>}

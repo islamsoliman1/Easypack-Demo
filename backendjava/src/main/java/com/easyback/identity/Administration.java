@@ -17,9 +17,9 @@ public class Administration {
     public record UserInput(@NotBlank @Email @Size(max=254) String email,
         @NotBlank @Size(max=120) String displayName, String password, @NotNull Boolean active,
         @NotNull @Size(max=100) List<@NotNull UUID> roleIds,
-        @NotNull @Size(max=50) Map<String, @NotNull Boolean> overrides, @NotNull Long version) {}
+        @NotNull Map<String, @NotNull Boolean> overrides, @NotNull Long version) {}
     public record RoleInput(@NotBlank @Size(max=80) String name, @NotNull @Size(max=240) String description,
-        @NotNull @Size(max=50) Set<@NotNull String> permissions, @NotNull Long version) {}
+        @NotNull Set<@NotNull String> permissions, @NotNull Long version) {}
     public record ResetPassword(@NotBlank String password, @NotNull Long version) {}
     static UUID actor(Authentication a) { return UUID.fromString(a.getName()); }
     static void require(Authentication a, String permission) {

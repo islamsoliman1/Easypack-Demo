@@ -21,7 +21,7 @@ public class TemplateService {
         db.sql("SELECT id FROM catalog_guard WHERE id=1 FOR UPDATE").query(Integer.class).single();
         if(id!=null) {
             var version=db.sql("SELECT version FROM operations_templates WHERE id=:id").param("id",id).query(Long.class).optional().orElseThrow(()->new ApiException(404,"NOT_FOUND","Template not found."));
-            if(version!=p.version()) throw new ApiException(409,"STALE_VERSION","Template changed.");
+            if(version.longValue()!=p.version().longValue()) throw new ApiException(409,"STALE_VERSION","Template changed.");
         } else if(p.version()!=0) throw new ApiException(409,"STALE_VERSION","New template version must be zero.");
         var checks=p.checks().stream().map(c->new OperationsData.CheckInput(c.label().trim(),c.criterion().trim())).toList();
         UUID target=id==null?UUID.randomUUID():id;

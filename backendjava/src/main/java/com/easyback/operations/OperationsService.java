@@ -2,6 +2,7 @@ package com.easyback.operations;
 
 import static com.easyback.operations.OperationsData.*;
 import com.easyback.identity.ApiException;
+import com.easyback.notifications.NotificationWriter;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -14,7 +15,8 @@ import org.springframework.transaction.annotation.*;
 @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
 public class OperationsService {
     private final JdbcClient db;
-    public OperationsService(JdbcClient db) { this.db=db; }
+    private final NotificationWriter notifications;
+    public OperationsService(JdbcClient db,NotificationWriter notifications) { this.db=db; this.notifications=notifications; }
     private static void rule(boolean valid,String code) { if(!valid) throw new ApiException(409,code,"Operations action is not allowed."); }
     private static ApiException missing() { return new ApiException(404,"NOT_FOUND","Operations record not found."); }
     private void guard() {
@@ -101,6 +103,8 @@ public class OperationsService {
         db.sql("UPDATE operations_trials SET status=:status,finished_by=:actor,finished_at=CURRENT_TIMESTAMP,result_notes=:notes,version=version+1 WHERE id=:id")
             .param("id",t.id()).param("status",status).param("actor",actor).param("notes",notes.trim()).update();
         event(t.orderId(),t.id(),status,actor,notes);
+        var kind=switch(status) { case "FAILED" -> NotificationWriter.Kind.TRIAL_FAILED; case "ABORTED" -> NotificationWriter.Kind.TRIAL_ABORTED; case "INVALIDATED" -> NotificationWriter.Kind.TRIAL_INVALIDATED; default -> null; };
+        if(kind!=null) notifications.emit(kind,t.orderId(),t.id(),status,actor);
     }
     @Transactional
     public Detail finish(UUID id,Finish p,UUID actor) {
@@ -117,6 +121,7 @@ public class OperationsService {
         if(p.outcome()==Outcome.PASSED) db.sql("UPDATE manufacturing_orders SET status='COMPLETED',tested_at=CURRENT_TIMESTAMP,completed_at=CURRENT_TIMESTAMP,passed_trial_id=:trial,rework_required=false,version=version+1 WHERE id=:id")
             .param("id",o.id()).param("trial",id).update();
         else db.sql("UPDATE manufacturing_orders SET status='REWORK',tested_at=CURRENT_TIMESTAMP,rework_required=true,version=version+1 WHERE id=:id").param("id",o.id()).update();
+        if(p.outcome()==Outcome.PASSED) notifications.emit(NotificationWriter.Kind.ORDER_COMPLETED,o.id(),id,"passed",actor);
         return detail(o.id());
     }
     @Transactional
@@ -132,6 +137,7 @@ public class OperationsService {
         db.sql("UPDATE operations_trials SET resolved_by=:actor,resolved_at=CURRENT_TIMESTAMP,resolution_notes=:notes,version=version+1 WHERE id=:id")
             .param("id",id).param("actor",actor).param("notes",p.notes().trim()).update();
         db.sql("UPDATE manufacturing_orders SET status='AWAITING_TESTING',rework_required=false,assembly_completed_at=coalesce(assembly_completed_at,CURRENT_TIMESTAMP),version=version+1 WHERE id=:id").param("id",o.id()).update();
+        notifications.ready(o.id(),o.status(),actor);
         event(o.id(),id,"RESOLVED",actor,p.notes()); return detail(o.id());
     }
     @Transactional

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { Check, ChevronLeft, ChevronRight, ClipboardList, PackageCheck, PackagePlus, Play, RefreshCw, RotateCcw, Search, Send } from 'lucide-react';
@@ -121,18 +121,56 @@ export function OrderWarehouse({ orderId, responsibleName }: { orderId: string; 
   </section>;
 }
 export function PreparationsPage() {
-  const { user } = useAuth(); const client = useQueryClient();
-  const allowed = can(user, 'orders.view') && (can(user, 'stock.view') || can(user, 'preparation.manage'));
-  const query = useQuery({ queryKey: ['warehouse', 'preparations'], queryFn: () => api<Preparation[]>('/warehouse/preparations'), enabled: allowed });
-  const [status, setStatus] = useState('all'), [pending, setPending] = useState(false), [error, setError] = useState<unknown>(null);
-  if (!allowed) return <Denied />;
-  return <><div className="page-heading"><div><div className="eyebrow">التصنيع</div><h1>نواقص وتجهيز القطع</h1></div><IconButton label="تحديث النواقص" disabled={query.isFetching || pending} onClick={() => void query.refetch()}><RefreshCw size={18} /></IconButton></div><ErrorBox error={error} />
-    {query.isPending ? <Busy /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : <StockTable rows={(query.data ?? []).filter(p => status === 'all' || p.status === status)} searchText={r => `${r.orderCode} ${r.orderTitle} ${r.partCode} ${r.partName} ${r.positionCode}`} filters={<select aria-label="حالة التجهيز" value={status} onChange={e => setStatus(e.target.value)}><option value="all">كل الحالات</option>{['REQUESTED', 'IN_PROGRESS', 'FULFILLED', 'CANCELLED'].map(s => <option key={s} value={s}>{states[s]}</option>)}</select>} columns={[
-      { label: 'الطلب', cell: r => <><Link className="inline-link" to={`/orders/${r.orderId}`}>{r.orderTitle}</Link><span className="record-code" dir="ltr">{r.orderCode}</span></> }, { label: 'الموضع', cell: r => r.positionCode }, { label: 'القطعة', cell: r => <PartName code={r.partCode} name={r.partName} /> },
-      { label: 'عند الطلب', cell: r => r.requestedQuantity }, { label: 'المتبقي', cell: r => r.missing }, { label: 'الحالة', cell: r => <Badge status={r.status} /> }, { label: 'ملاحظات', cell: r => <span className="cell-notes">{r.notes || '—'}</span> },
-      { label: 'الإجراءات', cell: r => <div className="bom-actions">{can(user, 'preparation.manage') && r.status === 'REQUESTED' && <button disabled={pending} onClick={async () => {
-        setPending(true); setError(null); try { await api(`/warehouse/preparations/${r.id}/start`, 'POST', { version: r.version }); await invalidateStock(client); } catch (e) { setError(e); } finally { setPending(false); }
-      }}><Play size={16} />بدء التجهيز</button>}{can(user, 'stock.view') && can(user, 'raw.issue') && r.status === 'IN_PROGRESS' && r.missing > 0 && <Link className="inline-link" to={`/raw-stock?preparation=${r.id}`}><Send size={16} />صرف خامة</Link>}</div> },
-    ]} />}
+    const { user } = useAuth();
+    const client = useQueryClient();
+    const [params, setParams] = useSearchParams();
+    const selectedId = params.get('preparation');
+    const allowed = can(user, 'orders.view') && (can(user, 'stock.view') || can(user, 'preparation.manage'));
+    const query = useQuery({ queryKey: ['warehouse', 'preparations'], queryFn: () => api<Preparation[]>('/warehouse/preparations'), enabled: allowed });
+    const [status, setStatus] = useState('all'), [pending, setPending] = useState(false), [error, setError] = useState<unknown>(null);
+    const selected = query.data?.find(p => p.id === selectedId);
+    if (!allowed)
+        return <Denied />;
+    return <><div className="page-heading"><div><div className="eyebrow">{"التصنيع"}</div><h1>{"نواقص وتجهيز القطع"}</h1></div><IconButton label={"تحديث النواقص"} disabled={query.isFetching || pending} onClick={() => void query.refetch()}><RefreshCw size={18}/></IconButton></div><ErrorBox error={error}/>
+    {selectedId && <Modal title={'طلب التجهيز المحدد'} close={() => { if (pending)
+            return; const next = new URLSearchParams(params); next.delete('preparation'); setParams(next); }}>
+      {query.isPending ? <Busy /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()}/> : selected ? <section className="preparation-selected">
+        <h3>{selected.partName}</h3><p dir="ltr">{selected.orderCode} · {selected.positionCode}</p><Badge status={selected.status}/>
+        <p>{"\u0639\u0646\u062F \u0627\u0644\u0637\u0644\u0628: " + selected.requestedQuantity + " \u00B7 \u0627\u0644\u0645\u062A\u0628\u0642\u064A: " + selected.missing}</p><p>{selected.notes}</p>
+        <Link className="inline-link" to={`/orders/${selected.orderId}`}>{'فتح طلب التصنيع'}</Link>
+        {can(user, 'preparation.manage') && selected.status === 'REQUESTED' && <button disabled={pending} onClick={async () => {
+                        setPending(true);
+                        setError(null);
+                        try {
+                            await api(`/warehouse/preparations/${selected.id}/start`, 'POST', { version: selected.version });
+                            await invalidateStock(client);
+                        }
+                        catch (e) {
+                            setError(e);
+                        }
+                        finally {
+                            setPending(false);
+                        }
+                    }}>{'بدء التجهيز المحدد'}</button>}<ErrorBox error={error}/>
+      </section> : <p role="status">{'طلب التجهيز غير متاح أو لم يعد لديك حق الوصول إليه.'}</p>}
+    </Modal>}
+    {query.isPending ? <Busy /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()}/> : <StockTable rows={(query.data ?? []).filter(p => status === 'all' || p.status === status)} searchText={r => `${r.orderCode} ${r.orderTitle} ${r.partCode} ${r.partName} ${r.positionCode}`} filters={<select aria-label={"حالة التجهيز"} value={status} onChange={e => setStatus(e.target.value)}><option value="all">{"كل الحالات"}</option>{['REQUESTED', 'IN_PROGRESS', 'FULFILLED', 'CANCELLED'].map(s => <option key={s} value={s}>{states[s]}</option>)}</select>} columns={[
+                { label: 'الطلب', cell: r => <><Link className="inline-link" to={`/orders/${r.orderId}`}>{r.orderTitle}</Link><span className="record-code" dir="ltr">{r.orderCode}</span></> }, { label: 'الموضع', cell: r => r.positionCode }, { label: 'القطعة', cell: r => <PartName code={r.partCode} name={r.partName}/> },
+                { label: 'عند الطلب', cell: r => r.requestedQuantity }, { label: 'المتبقي', cell: r => r.missing }, { label: 'الحالة', cell: r => <Badge status={r.status}/> }, { label: 'ملاحظات', cell: r => <span className="cell-notes">{r.notes || '—'}</span> },
+                { label: 'الإجراءات', cell: r => <div className="bom-actions">{can(user, 'preparation.manage') && r.status === 'REQUESTED' && <button disabled={pending} onClick={async () => {
+                                setPending(true);
+                                setError(null);
+                                try {
+                                    await api(`/warehouse/preparations/${r.id}/start`, 'POST', { version: r.version });
+                                    await invalidateStock(client);
+                                }
+                                catch (e) {
+                                    setError(e);
+                                }
+                                finally {
+                                    setPending(false);
+                                }
+                            }}><Play size={16}/>{"بدء التجهيز"}</button>}{can(user, 'stock.view') && can(user, 'raw.issue') && r.status === 'IN_PROGRESS' && r.missing > 0 && <Link className="inline-link" to={`/raw-stock?preparation=${r.id}`}><Send size={16}/>{"صرف خامة"}</Link>}</div> }
+            ]}/>}
   </>;
 }

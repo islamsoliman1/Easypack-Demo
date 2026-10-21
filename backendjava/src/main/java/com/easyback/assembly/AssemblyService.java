@@ -5,6 +5,7 @@ import com.easyback.identity.ApiException;
 import com.easyback.identity.IdentityStore;
 import com.easyback.operations.OperationsService;
 import com.easyback.time.WorkService;
+import com.easyback.notifications.NotificationWriter;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -20,7 +21,8 @@ public class AssemblyService {
     private final IdentityStore identity;
     private final OperationsService operations;
     private final WorkService work;
-    public AssemblyService(JdbcClient db,IdentityStore identity,OperationsService operations,WorkService work) { this.db=db; this.identity=identity; this.operations=operations; this.work=work; }
+    private final NotificationWriter notifications;
+    public AssemblyService(JdbcClient db,IdentityStore identity,OperationsService operations,WorkService work,NotificationWriter notifications) { this.db=db; this.identity=identity; this.operations=operations; this.work=work; this.notifications=notifications; }
     public static boolean active(String status) { return Set.of("OPEN","IN_PROGRESS","AWAITING_TESTING","TESTING","REWORK").contains(status); }
     private static void rule(boolean valid,String code) { if(!valid) throw new ApiException(409,code,"Assembly operation is not allowed."); }
     private static ApiException missing() { return new ApiException(404,"NOT_FOUND","Task not found."); }
@@ -80,7 +82,8 @@ public class AssemblyService {
         db.sql("INSERT INTO audit_logs(id,actor_id,action,target_id) VALUES (:id,:actor,:action,:task)")
             .param("id",UUID.randomUUID()).param("actor",actor).param("action","TASK_"+action).param("task",t.id()).update();
     }
-    private void syncOrder(UUID order) {
+    private void syncOrder(UUID order,UUID actor) {
+        String before=db.sql("SELECT status FROM manufacturing_orders WHERE id=:id").param("id",order).query(String.class).single();
         db.sql("""
             UPDATE manufacturing_orders o SET status=CASE WHEN o.rework_required THEN 'REWORK' ELSE x.status END,assembly_completed_at=CASE WHEN x.status='AWAITING_TESTING'
               THEN coalesce(o.assembly_completed_at,CURRENT_TIMESTAMP) ELSE NULL END,version=o.version+1
@@ -89,6 +92,7 @@ public class AssemblyService {
               FROM assembly_tasks t JOIN order_requirements r ON r.id=t.requirement_id WHERE r.order_id=:id) x
             WHERE o.id=:id AND o.status IN ('OPEN','IN_PROGRESS','AWAITING_TESTING','REWORK')
             """).param("id",order).update();
+        notifications.ready(order,before,actor);
     }
     private void editable(Task t,long version) { rule(t.version()==version,"STALE_VERSION"); rule(active(t.orderStatus()),"ORDER_LOCKED"); }
     @Transactional
@@ -102,10 +106,12 @@ public class AssemblyService {
         rule(db.sql("SELECT count(*) FROM stock_pieces WHERE requirement_id=:req AND status='ISSUED' AND task_id IS NULL").param("req",t.requirementId()).query(Long.class).single()==0,"TASK_RETURN_BEFORE_ASSIGN");
         rule(p.workerId()==null || eligible(p.workerId()),"TASK_WORKER_INVALID");
         rule(t.workerId()==null || Objects.equals(t.workerId(),p.workerId()) || !p.notes().isBlank(),"TASK_ASSIGN_REASON_REQUIRED");
+        if(Objects.equals(t.workerId(),p.workerId())) return detail(id,actor,true);
         work.close(id,"ASSIGNMENT_CHANGED");
-        db.sql("UPDATE assembly_tasks SET worker_id=:worker,status='PENDING',started_at=NULL,version=version+1 WHERE id=:id")
+        db.sql("UPDATE assembly_tasks SET worker_id=:worker,status='PENDING',started_at=NULL,version=version+1,assignment_epoch=assignment_epoch+1 WHERE id=:id")
             .param("id",id).param("worker",p.workerId(),Types.OTHER).update();
-        event(t,p.workerId()==null?"UNASSIGNED":"ASSIGNED",actor,p.workerId(),null,p.notes()); syncOrder(t.orderId()); return detail(id,actor,true);
+        if(p.workerId()!=null) notifications.emit(NotificationWriter.Kind.TASK_ASSIGNED,t.orderId(),id,Long.toString(t.version()+1),actor);
+        event(t,p.workerId()==null?"UNASSIGNED":"ASSIGNED",actor,p.workerId(),null,p.notes()); syncOrder(t.orderId(),actor); return detail(id,actor,true);
     }
     @Transactional
     public UUID issued(UUID requirement,UUID recipient,UUID piece,UUID actor) {
@@ -126,7 +132,7 @@ public class AssemblyService {
         if(taskId==null) return; guard(); var t=task(taskId);
         work.close(taskId,"PIECE_RETURNED");
         db.sql("UPDATE assembly_tasks SET status='PENDING',started_at=NULL,version=version+1 WHERE id=:id").param("id",taskId).update();
-        event(t,"PIECE_RETURNED",actor,t.workerId(),piece,notes); syncOrder(t.orderId());
+        event(t,"PIECE_RETURNED",actor,t.workerId(),piece,notes); syncOrder(t.orderId(),actor);
     }
     private void physicalReferences(Task t) {
         rule(db.sql("SELECT active FROM machines WHERE id=:id").param("id",t.machineId()).query(Boolean.class).single(),"MACHINE_INACTIVE");
@@ -139,7 +145,7 @@ public class AssemblyService {
         work.close(id,"PIECE_REJECTED");
         db.sql("UPDATE stock_pieces SET status='REJECTED',version=version+1 WHERE id=:id").param("id",t.pieceId()).update();
         db.sql("UPDATE assembly_tasks SET status='PENDING',started_at=NULL,version=version+1 WHERE id=:id").param("id",id).update();
-        stockMovement(t,"REJECTED",actor,p.reason()); event(t,"REJECTED",actor,actor,t.pieceId(),p.reason()); syncOrder(t.orderId());
+        stockMovement(t,"REJECTED",actor,p.reason()); event(t,"REJECTED",actor,actor,t.pieceId(),p.reason()); syncOrder(t.orderId(),actor);
         return detail(id,actor,true);
     }
     @Transactional
@@ -148,7 +154,7 @@ public class AssemblyService {
         rule(t.status().equals("PENDING") && "ISSUED".equals(t.pieceStatus()),"TASK_PIECE_REQUIRED"); physicalReferences(t);
         work.start(id,actor,false);
         db.sql("UPDATE assembly_tasks SET status='IN_PROGRESS',started_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=:id").param("id",id).update();
-        event(t,"STARTED",actor,t.workerId(),t.pieceId(),p.notes()); syncOrder(t.orderId()); return detail(id,actor,true);
+        event(t,"STARTED",actor,t.workerId(),t.pieceId(),p.notes()); syncOrder(t.orderId(),actor); return detail(id,actor,true);
     }
     private void stockMovement(Task t,String action,UUID actor,String notes) {
         db.sql("INSERT INTO stock_movements(id,piece_id,action,requirement_id,recipient_id,actor_id,reference,notes) VALUES (:id,:piece,:action,:req,:worker,:actor,'',:notes)")
@@ -182,7 +188,7 @@ public class AssemblyService {
         db.sql("UPDATE machines SET configuration_version=configuration_version+1,version=version+1 WHERE id=:id").param("id",t.machineId()).update();
         operations.configurationChanged(t.machineId(),actor);
         work.close(id,"INSTALLED");
-        stockMovement(t,"INSTALLED",actor,p.notes()); event(t,"INSTALLED",actor,actor,t.pieceId(),p.notes()); syncOrder(t.orderId()); return detail(id,actor,true);
+        stockMovement(t,"INSTALLED",actor,p.notes()); event(t,"INSTALLED",actor,actor,t.pieceId(),p.notes()); syncOrder(t.orderId(),actor); return detail(id,actor,true);
     }
     @Transactional
     public Detail uninstall(UUID id,Removal p,UUID actor,boolean all) {
@@ -194,7 +200,7 @@ public class AssemblyService {
         db.sql("UPDATE stock_pieces SET status='ISSUED',version=version+1 WHERE id=:id").param("id",t.pieceId()).update();
         db.sql("UPDATE machines SET configuration_version=configuration_version+1,version=version+1 WHERE id=:id").param("id",t.machineId()).update();
         operations.configurationChanged(t.machineId(),actor);
-        stockMovement(t,"UNINSTALLED",actor,p.reason()); event(t,"UNINSTALLED",actor,t.workerId(),t.pieceId(),p.reason()); syncOrder(t.orderId()); return detail(id,actor,true);
+        stockMovement(t,"UNINSTALLED",actor,p.reason()); event(t,"UNINSTALLED",actor,t.workerId(),t.pieceId(),p.reason()); syncOrder(t.orderId(),actor); return detail(id,actor,true);
     }
     public MachineAssembly machine(UUID id) {
         var history=db.sql("""

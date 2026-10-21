@@ -36,13 +36,15 @@ public class DemoBootstrap implements ApplicationRunner {
     private final TemplateService templates;
     private final DefectService defects;
     private final WorkService work;
+    private final com.easyback.notifications.DemoNotificationSeed notifications;
 
     public DemoBootstrap(IdentityStore store, PasswordEncoder passwords, CatalogService catalog,
         OrderService orders, StockService stock, RawService raw, AssemblyService assembly,
-        OperationsService operations, TemplateService templates, DefectService defects, WorkService work) {
+        OperationsService operations, TemplateService templates, DefectService defects, WorkService work,com.easyback.notifications.DemoNotificationSeed notifications) {
         this.store=store; this.passwords=passwords; this.catalog=catalog; this.orders=orders;
         this.stock=stock; this.raw=raw; this.assembly=assembly; this.operations=operations;
         this.templates=templates; this.defects=defects; this.work=work;
+        this.notifications=notifications;
     }
 
     public static List<String> visitorPermissions() {
@@ -53,7 +55,7 @@ public class DemoBootstrap implements ApplicationRunner {
     @Override @Transactional
     public void run(ApplicationArguments args) {
         store.guard();
-        if (store.db().sql("SELECT seeded FROM demo_installation WHERE id=1 FOR UPDATE").query(Boolean.class).single()) return;
+        if (store.db().sql("SELECT seeded FROM demo_installation WHERE id=1 FOR UPDATE").query(Boolean.class).single()) { notifications.seed(); return; }
         if (store.db().sql("SELECT count(*) FROM users").query(Long.class).single()!=0)
             throw new IllegalStateException("Demo seeding requires an empty database.");
         UUID role=UUID.randomUUID();
@@ -102,6 +104,7 @@ public class DemoBootstrap implements ApplicationRunner {
         defects.report(pending.id(),new AssemblyData.Removal(pending.version(),"حساس تجريبي لا يستجيب أثناء الفحص"),VISITOR,true);
         store.db().sql("UPDATE demo_installation SET seeded=true WHERE id=1").update();
         store.audit(VISITOR,"DEMO_INITIALIZED",VISITOR);
+        notifications.seed();
     }
 
     private static BigDecimal bd(int value) { return BigDecimal.valueOf(value); }

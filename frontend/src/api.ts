@@ -34,7 +34,9 @@ async function raw<T>(path: string, method = 'GET', body?: unknown, binary = fal
     const problem = await response.json().catch(() => ({}));
     throw new ApiError(response.status, problem.code ?? 'NETWORK');
   }
-  return response.status === 204 ? undefined as T : binary ? response.blob() as Promise<T> : response.json();
+  const result = response.status === 204 ? undefined as T : binary ? await response.blob() as T : await response.json();
+  if (method !== 'GET' && !path.startsWith('/auth/') && !path.startsWith('/notifications/')) window.dispatchEvent(new Event('workflow-saved'));
+  return result;
 }
 export function refreshSession(): Promise<Session> {
   if (!refreshTask) {
@@ -47,7 +49,7 @@ export function refreshSession(): Promise<Session> {
         return raw<Session>('/auth/demo', 'POST');
       }
     };
-    const pending = navigator.locks ? navigator.locks.request('easyback-refresh', rotate) : rotate();
+    const pending = (navigator.locks ? navigator.locks.request('easyback-refresh', rotate) : rotate()) as Promise<Session>;
     refreshTask = pending.then(session => {
       access = session.accessToken; return session;
     }).finally(() => { refreshTask = null; });

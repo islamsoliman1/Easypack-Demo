@@ -20,7 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.*;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,properties="easyback.notifications.scheduler-enabled=false")
 class IdentityIT {
     @DynamicPropertySource
     static void dedicatedDatabase(DynamicPropertyRegistry properties) {
@@ -33,6 +33,11 @@ class IdentityIT {
     @Autowired JdbcClient db;
     @Autowired Bootstrap bootstrap;
     @Autowired IdentityStore identityStore;
+    @Autowired com.easyback.notifications.NotificationWriter notificationWriter;
+    @Autowired com.easyback.notifications.DeliveryReminderEvaluator reminderEvaluator;
+    @Autowired com.easyback.assembly.AssemblyService assemblyService;
+    @Autowired com.easyback.files.FileService fileService;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     @Autowired org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
     @MockitoBean Clock workClock;
     final JsonMapper json = JsonMapper.builder().build();
@@ -42,7 +47,7 @@ class IdentityIT {
         when(workClock.instant()).thenReturn(Instant.parse("2026-10-12T09:00:00Z"));
         assertEquals("easyback_test", db.sql("SELECT current_database()").query(String.class).single(),
             "Refusing to reset a non-test database.");
-        db.sql("TRUNCATE work_sessions, work_days, resource_files, operations_templates, operations_events, operations_configuration, operations_checks, operations_trials, defect_events, defect_cases, assembly_events, installations, assembly_tasks, raw_cut_outputs, raw_cuts, raw_movements, raw_units, stock_movements, stock_pieces, preparation_requests, order_requirements, manufacturing_orders, bom_items, bom_versions, machines, parts, machine_models, audit_logs, refresh_tokens, user_sessions, user_permission_overrides, user_roles, role_permissions, roles, users CASCADE").update();
+        db.sql("TRUNCATE notification_recipients, notifications, work_sessions, work_days, resource_files, operations_templates, operations_events, operations_configuration, operations_checks, operations_trials, defect_events, defect_cases, assembly_events, installations, assembly_tasks, raw_cut_outputs, raw_cuts, raw_movements, raw_units, stock_movements, stock_pieces, preparation_requests, order_requirements, manufacturing_orders, bom_items, bom_versions, machines, parts, machine_models, audit_logs, refresh_tokens, user_sessions, user_permission_overrides, user_roles, role_permissions, roles, users CASCADE").update();
         db.sql("UPDATE work_calendar SET version=0,weekdays=ARRAY[1,2,3,4,6,7],breaks='[]',breaks_confirmed=false WHERE id=1").update();
         bootstrap.run(null);
         db.sql("UPDATE users SET must_change_password = false").update();
@@ -1245,6 +1250,258 @@ class IdentityIT {
         var viewOnly=new Client(); viewOnly.login("report-viewer@test.local",INITIAL);
         viewOnly.read(viewOnly.call("GET","/reports"+range+"&q=Pump",null,false),200);
         viewOnly.read(viewOnly.call("GET","/reports/export"+range+"&q=Pump",null,false),403);
+    }
+    JsonNode inbox(Client c) throws Exception { return c.read(c.call("GET","/notifications?limit=50",null,false),200).path("items"); }
+    long unread(Client c) throws Exception { return c.read(c.call("GET","/notifications/unread-count",null,false),200).path("count").asLong(); }
+    long eventCount(String type) { return db.sql("SELECT count(*) FROM notifications WHERE type=:type").param("type",type).query(Long.class).single(); }
+    Worker notificationUser(String name,String... permissions) throws Exception {
+        Map<String,Boolean> grants=new HashMap<>(); for(String p:permissions) grants.put(p,true);
+        var u=admin.read(admin.call("POST","/users",input(name+"@test.local",List.of(),grants),true),201);
+        db.sql("UPDATE users SET must_change_password=false WHERE id=:id").param("id",UUID.fromString(u.path("id").asText())).update();
+        var c=new Client(); c.login(name+"@test.local",INITIAL); return new Worker(u.path("id").asText(),c);
+    }
+    void override(String user,String permission,boolean allowed) {
+        db.sql("INSERT INTO user_permission_overrides(user_id,permission,allowed) VALUES (:id,:permission,:allowed) ON CONFLICT(user_id,permission) DO UPDATE SET allowed=EXCLUDED.allowed")
+            .param("id",UUID.fromString(user)).param("permission",permission).param("allowed",allowed).update();
+    }
+    @Test void notificationAssignmentsArePrivateIdempotentAndNeverReviveSupersededOccurrences() throws Exception {
+        var f=orderFixture(); String order=openStockOrder(f,"notification-assign").path("id").asText();
+        var a=assemblyWorker("notification-a"); var b=assemblyWorker("notification-b");
+        var t=assignTask(assemblyTasks(order).get(0),a.id()); String id=inbox(a.client()).get(0).path("id").asText();
+        assertEquals(1,unread(a.client())); assertEquals(0,unread(b.client()));
+        assertEquals("/tasks?task="+t.path("id").asText(),inbox(a.client()).get(0).path("target").asText());
+        b.client().read(b.client().call("POST","/notifications/"+id+"/read",null,true),404);
+        var cookieOnly=new Client(); cookieOnly.read(cookieOnly.call("POST","/notifications/"+id+"/read",null,false),403);
+        // Existing resource-server policy exempts explicit Bearer requests from CSRF.
+        a.client().read(a.client().call("POST","/notifications/"+id+"/read",null,false),204);
+        a.client().read(a.client().call("POST","/notifications/"+id+"/read",null,true),204);
+        String readAt=inbox(a.client()).get(0).path("readAt").asText();
+        when(workClock.instant()).thenReturn(Instant.parse("2026-10-12T10:00:00Z"));
+        a.client().read(a.client().call("POST","/notifications/"+id+"/read",null,true),204);
+        assertEquals(readAt,inbox(a.client()).get(0).path("readAt").asText());
+        t=assignTask(t,a.id()); assertEquals(1,eventCount("TASK_ASSIGNED"));
+        t=assignTask(t,b.id()); assertEquals(0,inbox(a.client()).size());
+        a.client().read(a.client().call("POST","/notifications/"+id+"/read",null,true),404);
+        t=assignTask(t,a.id()); assertEquals(1,inbox(a.client()).size()); assertNotEquals(id,inbox(a.client()).get(0).path("id").asText());
+        override(a.id(),"tasks.view-assigned",false); assertEquals(0,unread(a.client())); assertEquals(0,inbox(a.client()).size());
+        override(a.id(),"tasks.view-assigned",true); assertEquals(1,unread(a.client()));
+        a.client().read(a.client().call("POST","/notifications/read-all",null,true),204); assertEquals(0,unread(a.client()));
+        db.sql("UPDATE users SET active=false WHERE id=:id").param("id",UUID.fromString(a.id())).update();
+        a.client().read(a.client().call("GET","/notifications",null,false),401);
+    }
+    @Test void notificationPaginationUsesStableTiesAndValidatesInputs() throws Exception {
+        var f=orderFixture(); String order=openStockOrder(f,"notification-pages").path("id").asText(); var w=assemblyWorker("notification-pages");
+        for(var task:assemblyTasks(order)) assignTask(task,w.id());
+        Set<String> seen=new HashSet<>(); String cursor=null;
+        do {
+            var page=w.client().read(w.client().call("GET","/notifications?limit=1"+(cursor==null?"":"&cursor="+cursor),null,false),200);
+            assertEquals(1,page.path("items").size()); assertTrue(seen.add(page.path("items").get(0).path("id").asText()));
+            cursor=page.path("nextCursor").isNull()?null:page.path("nextCursor").asText();
+        } while(cursor!=null);
+        assertEquals(4,seen.size());
+        for(String q:List.of("limit=0","limit=51","severity=BAD","cursor=invalid","unreadOnly=garbage")) w.client().read(w.client().call("GET","/notifications?"+q,null,false),400);
+        w.client().read(w.client().call("POST","/notifications/read-all",null,true),204);
+        assertEquals(0,w.client().read(w.client().call("GET","/notifications?unreadOnly=true",null,false),200).path("items").size());
+        assertEquals(4,inbox(w.client()).size());
+    }
+    @Test void notificationWritesRollbackWithBusinessActionAndDeduplicateAtDatabase() throws Exception {
+        var f=orderFixture(); String order=openStockOrder(f,"notification-rollback").path("id").asText(); var w=assemblyWorker("notification-rollback"); var task=assemblyTasks(order).get(0);
+        UUID taskId=UUID.fromString(task.path("id").asText()),actor=UUID.fromString(f.owner());
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        assertThrows(IllegalStateException.class,()->tx.executeWithoutResult(s->{
+            assemblyService.assign(taskId,new com.easyback.assembly.AssemblyData.Assignment(task.path("version").asLong(),UUID.fromString(w.id()),"Rollback test"),actor);
+            throw new IllegalStateException("simulate later business failure");
+        }));
+        assertEquals(0,eventCount("TASK_ASSIGNED")); assertTrue(assemblyTask(taskId.toString()).path("workerId").isNull());
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->tx.executeWithoutResult(s->{
+            db.sql("ALTER TABLE notification_recipients ADD CONSTRAINT notification_test_failure CHECK(false) NOT VALID").update();
+            assemblyService.assign(taskId,new com.easyback.assembly.AssemblyData.Assignment(task.path("version").asLong(),UUID.fromString(w.id()),"Writer failure test"),actor);
+        }));
+        assertEquals(0,eventCount("TASK_ASSIGNED")); assertTrue(assemblyTask(taskId.toString()).path("workerId").isNull());
+        assignTask(task,w.id());
+        tx.executeWithoutResult(s->notificationWriter.emit(com.easyback.notifications.NotificationWriter.Kind.TASK_ASSIGNED,UUID.fromString(order),taskId,"1",actor));
+        assertEquals(1,eventCount("TASK_ASSIGNED")); assertEquals(1,inbox(w.client()).size());
+    }
+    @Test void notificationRecipientsReadIndependentlyAndHiddenNewestDoesNotConsumePage() throws Exception {
+        var f=orderFixture(); UUID order=UUID.fromString(openStockOrder(f,"notification-shared").path("id").asText());
+        assertEquals(2,db.sql("SELECT count(*) FROM notifications").query(Long.class).single());
+        assertEquals(0,db.sql("SELECT count(*) FROM notification_recipients").query(Long.class).single(),"Actor suppression retains events even without another eligible user");
+        var a=notificationUser("notification-shared-a","orders.view","stock.view","stock.reserve","operations.view","operations.start");
+        var b=notificationUser("notification-shared-b","orders.view","stock.view","stock.reserve");
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager); UUID actor=UUID.fromString(f.owner());
+        tx.executeWithoutResult(s->notificationWriter.emit(com.easyback.notifications.NotificationWriter.Kind.ORDER_SHORTAGE,order,null,"shared",actor));
+        String id=inbox(a.client()).get(0).path("id").asText(); assertEquals(id,inbox(b.client()).get(0).path("id").asText());
+        a.client().read(a.client().call("POST","/notifications/"+id+"/read",null,true),204);
+        assertEquals(0,unread(a.client())); assertEquals(1,unread(b.client()));
+        when(workClock.instant()).thenReturn(Instant.parse("2026-10-12T10:00:00Z"));
+        tx.executeWithoutResult(s->notificationWriter.emit(com.easyback.notifications.NotificationWriter.Kind.ORDER_READY_FOR_TEST,order,null,"hidden-newest",actor));
+        override(a.id(),"operations.start",false);
+        var page=a.client().read(a.client().call("GET","/notifications?limit=1",null,false),200);
+        assertEquals(id,page.path("items").get(0).path("id").asText()); assertTrue(page.path("nextCursor").isNull());
+        db.sql("UPDATE users SET active=false WHERE id=:id").param("id",UUID.fromString(b.id())).update();
+        tx.executeWithoutResult(s->notificationWriter.emit(com.easyback.notifications.NotificationWriter.Kind.ORDER_SHORTAGE,order,null,"active-only",actor));
+        assertEquals(1,db.sql("SELECT count(*) FROM notification_recipients r JOIN notifications n ON n.id=r.notification_id WHERE n.dedupe_key=:key")
+            .param("key","ORDER_SHORTAGE:"+order+":active-only").query(Long.class).single());
+    }
+    @Test void notificationDefectHandoffsHonorAlternativeCapabilitiesAndFreezeSafeSummary() throws Exception {
+        var receiver=notificationUser("notification-receiver","defects.view","orders.view","stock.view","stock.return","defects.manage","stock.receive");
+        var missingPrerequisite=notificationUser("notification-no-order","defects.view","defects.manage");
+        var f=defectFixture("notification-defect"); var d=reject(f);
+        assertEquals(1,eventCount("DEFECT_REPORTED")); assertEquals(0,inbox(missingPrerequisite.client()).size());
+        var item=inbox(receiver.client()).get(0); String id=item.path("id").asText(),body=item.path("body").asText();
+        assertFalse(item.toString().contains("Cracked mounting face"));
+        override(receiver.id(),"stock.return",false); assertEquals(1,unread(receiver.client()));
+        assertEquals("/defects?case="+d.path("id").asText(),inbox(receiver.client()).get(0).path("target").asText());
+        receiver.client().read(receiver.client().call("POST","/notifications/"+id+"/read",null,true),204);
+        d=defectAction(d,"receive"); assertEquals(1,eventCount("DEFECT_RECEIVED"));
+        d=defectAction(d,"repair-start"); d=defectAction(d,"repair-finish"); assertEquals(1,eventCount("REPAIR_COMPLETED"));
+        db.sql("UPDATE manufacturing_orders SET title='changed title' WHERE id=:id").param("id",UUID.fromString(f.order())).update();
+        assertTrue(inbox(receiver.client()).toString().contains(body)); assertFalse(inbox(receiver.client()).toString().contains("changed title"));
+        override(receiver.id(),"orders.view",false); assertEquals(0,unread(receiver.client())); assertEquals(0,inbox(receiver.client()).size());
+    }
+    @Test void notificationOwnerFallsBackToOrderAfterOperationalAccessRevocation() throws Exception {
+        var f=orderFixture(); var owner=notificationUser("notification-owner","orders.view-assigned","operations.view","operations.start");
+        var input=orderInput("notification-owner",f); input.put("responsibleId",owner.id()); String order=newOrder(input).path("id").asText();
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        tx.executeWithoutResult(s->notificationWriter.emit(com.easyback.notifications.NotificationWriter.Kind.ORDER_READY_FOR_TEST,UUID.fromString(order),null,"test",UUID.fromString(f.owner())));
+        String id=inbox(owner.client()).get(0).path("id").asText(); assertEquals("/operations/"+order,inbox(owner.client()).get(0).path("target").asText());
+        override(owner.id(),"operations.start",false); override(owner.id(),"operations.view",false);
+        assertEquals(1,unread(owner.client())); assertEquals("/orders/"+order,inbox(owner.client()).get(0).path("target").asText());
+        owner.client().read(owner.client().call("POST","/notifications/"+id+"/read",null,true),204);
+        override(owner.id(),"orders.view-assigned",false); assertEquals(0,inbox(owner.client()).size());
+    }
+    @Test void notificationPreparationTransitionsOnlyEmitOnceAndReopenOnActualShortage() throws Exception {
+        var manager=notificationUser("notification-preparation","orders.view","preparation.manage","stock.view","stock.issue");
+        var f=orderFixture(); String order=openStockOrder(f,"notification-preparation").path("id").asText();
+        assertEquals(1,eventCount("ORDER_SHORTAGE")); assertEquals(0,eventCount("PREPARATION_REQUESTED"));
+        var prep=preparationFor(order); assertEquals(1,eventCount("PREPARATION_REQUESTED"));
+        receipt(f.part(),"NOTIFY1","NOTIFY2","NOTIFY3","NOTIFY4");
+        admin.read(admin.call("POST","/manufacturing-orders/"+order+"/stock/reserve",Map.of("version",stock(order).path("version").asLong()),true),200);
+        assertEquals(1,eventCount("PREPARATION_FULFILLED"));
+        admin.read(admin.call("POST","/manufacturing-orders/"+order+"/stock/reserve",Map.of("version",stock(order).path("version").asLong()),true),200);
+        assertEquals(1,eventCount("PREPARATION_FULFILLED"));
+        String piece=stock(order).path("pieces").get(0).path("id").asText();
+        admin.read(admin.call("POST","/manufacturing-orders/"+order+"/stock/issue",Map.of("version",stock(order).path("version").asLong(),"pieceIds",List.of(piece),"notes",""),true),200);
+        admin.read(admin.call("POST","/manufacturing-orders/"+order+"/stock/pieces/"+piece+"/return",Map.of("version",stock(order).path("version").asLong(),"condition","GOOD","notes","Returned"),true),200);
+        assertEquals(2,eventCount("PREPARATION_REQUESTED")); assertTrue(inbox(manager.client()).size()>=3);
+        assertEquals("REQUESTED",rawPreparation(prep.path("id").asText()).path("status").asText());
+    }
+    @Test void notificationTrialCyclesCoverReadyFailureAbortInvalidationAndCompletion() throws Exception {
+        var operator=notificationUser("notification-operator","operations.view","operations.start","operations.resolve","operations.deliver");
+        var f=operationsFixture(); assertEquals(1,eventCount("ORDER_READY_FOR_TEST"));
+        var t=startTrial(f.order()).path("trials").get(0); var detail=finishTrial(t,false); assertEquals(1,eventCount("TRIAL_FAILED"));
+        t=detail.path("trials").get(0);
+        admin.read(admin.call("POST","/operations/trials/"+t.path("id").asText()+"/resolve",Map.of("version",t.path("version").asLong(),"orderVersion",detail.path("order").path("version").asLong(),"notes","Fixed"),true),200);
+        assertEquals(2,eventCount("ORDER_READY_FOR_TEST"));
+        t=startTrial(f.order()).path("trials").get(0); detail=finishTrial(t,false); assertEquals(2,eventCount("TRIAL_FAILED"));
+        t=detail.path("trials").get(0);
+        admin.read(admin.call("POST","/operations/trials/"+t.path("id").asText()+"/resolve",Map.of("version",t.path("version").asLong(),"orderVersion",detail.path("order").path("version").asLong(),"notes","Second repair"),true),200);
+        t=startTrial(f.order()).path("trials").get(0); detail=admin.read(admin.call("POST","/operations/trials/"+t.path("id").asText()+"/abort",Map.of("version",t.path("version").asLong(),"notes","Power outage"),true),200);
+        assertEquals(1,eventCount("TRIAL_ABORTED")); t=detail.path("trials").get(0);
+        admin.read(admin.call("POST","/operations/trials/"+t.path("id").asText()+"/resolve",Map.of("version",t.path("version").asLong(),"orderVersion",detail.path("order").path("version").asLong(),"notes","Power restored"),true),200);
+        startTrial(f.order()); taskAction(f.worker(),f.tasks().getFirst(),"uninstall"); assertEquals(1,eventCount("TRIAL_INVALIDATED"));
+        taskAction(f.worker(),f.tasks().getFirst(),"install"); detail=operations(f.order()); t=detail.path("trials").get(0);
+        admin.read(admin.call("POST","/operations/trials/"+t.path("id").asText()+"/resolve",Map.of("version",t.path("version").asLong(),"orderVersion",detail.path("order").path("version").asLong(),"notes","Inspected"),true),200);
+        finishTrial(startTrial(f.order()).path("trials").get(0),true); assertEquals(1,eventCount("ORDER_COMPLETED"));
+        assertEquals(10,inbox(operator.client()).size());
+    }
+    @Test void notificationDeadlinesAreExclusiveDeduplicatedAndIncludeCompletedUndelivered() throws Exception {
+        var f=orderFixture(); UUID order=UUID.fromString(openStockOrder(f,"notification-due").path("id").asText());
+        Instant due=Instant.parse("2026-10-14T09:00:00Z");
+        db.sql("UPDATE manufacturing_orders SET delivery_at=:due WHERE id=:id").param("id",order).param("due",java.sql.Timestamp.from(due)).update();
+        when(workClock.instant()).thenReturn(due.minusSeconds(86401)); reminderEvaluator.evaluate(order); assertEquals(0,eventCount("DELIVERY_DUE_SOON"));
+        when(workClock.instant()).thenReturn(due.minusSeconds(86400)); reminderEvaluator.evaluate(order); reminderEvaluator.evaluate(order); assertEquals(1,eventCount("DELIVERY_DUE_SOON"));
+        when(workClock.instant()).thenReturn(due); reminderEvaluator.evaluate(order); reminderEvaluator.evaluate(order); assertEquals(1,eventCount("DELIVERY_OVERDUE"));
+        UUID completed=UUID.fromString(openStockOrder(f,"notification-completed").path("id").asText());
+        UUID passed=UUID.randomUUID();
+        db.sql("INSERT INTO operations_trials(id,order_id,machine_id,configuration_version,status,started_by,start_notes,finished_by,finished_at,result_notes) VALUES (:id,:order,:machine,0,'PASSED',:actor,'Fixture',:actor,CURRENT_TIMESTAMP,'Passed fixture')")
+            .param("id",passed).param("order",completed).param("machine",UUID.fromString(f.machine())).param("actor",UUID.fromString(f.owner())).update();
+        db.sql("UPDATE manufacturing_orders SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP,tested_at=CURRENT_TIMESTAMP,passed_trial_id=:trial,delivery_at=:due WHERE id=:id")
+            .param("id",completed).param("trial",passed).param("due",java.sql.Timestamp.from(due)).update();
+        var first=CompletableFuture.runAsync(()->reminderEvaluator.evaluate(completed)); var second=CompletableFuture.runAsync(()->reminderEvaluator.evaluate(completed)); first.join(); second.join();
+        assertEquals(2,eventCount("DELIVERY_OVERDUE")); assertEquals(1,eventCount("DELIVERY_DUE_SOON"));
+        when(workClock.instant()).thenReturn(due.minusSeconds(60)); reminderEvaluator.evaluate(completed); assertEquals(1,eventCount("DELIVERY_DUE_SOON"));
+        db.sql("UPDATE manufacturing_orders SET delivered_at=CURRENT_TIMESTAMP,delivered_by=:actor,delivery_notes='Delivered fixture',delivery_at=:due WHERE id=:id")
+            .param("id",completed).param("actor",UUID.fromString(f.owner())).param("due",java.sql.Timestamp.from(due.minusSeconds(86400))).update();
+        reminderEvaluator.evaluate(completed);
+        for(String state:List.of("DRAFT","CANCELLED")) {
+            UUID excluded=UUID.fromString(newOrder(orderInput("notification-"+state,f)).path("id").asText());
+            db.sql("UPDATE manufacturing_orders SET status=:status,opened_at=:opened,cancelled_at=:cancelled,cancellation_reason=:reason,delivery_at=:due WHERE id=:id")
+                .param("id",excluded).param("status",state)
+                .param("opened",state.equals("DRAFT")?null:java.sql.Timestamp.from(due),java.sql.Types.TIMESTAMP)
+                .param("cancelled",state.equals("CANCELLED")?java.sql.Timestamp.from(due):null,java.sql.Types.TIMESTAMP)
+                .param("reason",state.equals("CANCELLED")?"Cancelled fixture":null,java.sql.Types.VARCHAR).param("due",java.sql.Timestamp.from(due.minusSeconds(86400))).update();
+            reminderEvaluator.evaluate(excluded);
+        }
+        assertEquals(2,eventCount("DELIVERY_OVERDUE"));
+    }
+    @Test void fullPermissionRolesAndOverridesRoundTripWithoutArbitraryCollectionLimits() throws Exception {
+        assertTrue(Permissions.ALL.size()>50);
+        JsonNode administrator=null;
+        for(var role:admin.read(admin.call("GET","/roles",null,false),200)) if(role.path("name").asText().equals("Administrator")) administrator=role;
+        assertNotNull(administrator);
+        var body=new HashMap<String,Object>(Map.of("name","Administrator","description","Updated full-permission role","permissions",Permissions.ALL,"version",administrator.path("version").asLong()));
+        var updated=admin.read(admin.call("PUT","/roles/"+administrator.path("id").asText(),body,true),200);
+        assertEquals(Permissions.ALL.size(),updated.path("permissions").size());
+        assertEquals("Updated full-permission role",updated.path("description").asText());
+        body.put("name","Full permission regression"); body.put("version",0);
+        var created=admin.read(admin.call("POST","/roles",body,true),201);
+        assertEquals(Permissions.ALL.size(),created.path("permissions").size());
+        var unknown=new ArrayList<>(Permissions.ALL); unknown.add("unknown.permission"); body.put("permissions",unknown);
+        assertEquals("UNKNOWN_PERMISSION",admin.read(admin.call("PUT","/roles/"+created.path("id").asText(),body,true),400).path("code").asText());
+        var overrides=new HashMap<String,Boolean>(); Permissions.ALL.forEach(p->overrides.put(p,true));
+        var userInput=input("all-overrides@test.local",List.of(),overrides);
+        var user=admin.read(admin.call("POST","/users",userInput,true),201);
+        assertEquals(Permissions.ALL.size(),user.path("overrides").size());
+        overrides.put("unknown.permission",true); userInput.put("email","unknown-overrides@test.local");
+        assertEquals("UNKNOWN_PERMISSION",admin.read(admin.call("POST","/users",userInput,true),400).path("code").asText());
+        assertEquals(0L,db.sql("SELECT count(*) FROM users WHERE email='unknown-overrides@test.local'").query(Long.class).single());
+    }
+    @Test void templateVersionsBeyondBoxedCacheCompareByValueAndKeepConcurrentProtection() throws Exception {
+        var body=new HashMap<String,Object>(Map.of("version",0,"name","Version boundary checklist","active",true,"checks",List.of(Map.of("label","Safety","criterion","Guard verified"))));
+        String id=admin.read(admin.call("POST","/operations/templates",body,true),201).path("id").asText();
+        for(long version:List.of(0L,127L,128L,1024L)) {
+            db.sql("UPDATE operations_templates SET version=:version WHERE id=:id").param("id",UUID.fromString(id)).param("version",version).update();
+            body.put("version",version);
+            var updated=admin.read(admin.call("PUT","/operations/templates/"+id,body,true),200);
+            assertEquals(version+1,updated.path("version").asLong());
+            assertEquals("STALE_VERSION",admin.read(admin.call("PUT","/operations/templates/"+id,body,true),409).path("code").asText());
+        }
+        body.put("version",1025L);
+        var first=CompletableFuture.supplyAsync(()->catalogStatus("PUT","/operations/templates/"+id,body));
+        var second=CompletableFuture.supplyAsync(()->catalogStatus("PUT","/operations/templates/"+id,body));
+        assertEquals(Set.of(200,409),Set.of(first.join(),second.join()));
+    }
+    @Test void attachmentMetadataNeverReadsBinaryColumnsAndLargeDownloadsRemainIntact() throws Exception {
+        var fixture=defectFixture("metadata-columns");
+        String pdf="%PDF-1.4\n"+" ".repeat(2*1024*1024)+"\n%%EOF";
+        var file=admin.read(upload(admin,fixture.order(),pdf),201);
+        admin.read(upload(admin,fixture.order(),pdf+"\nsecond"),201);
+        admin.read(upload(admin,fixture.order(),pdf+"\nthird"),201);
+        String role="review_metadata_"+UUID.randomUUID().toString().replace("-","");
+        assertTrue(role.matches("review_metadata_[a-f0-9]{32}"));
+        db.sql("CREATE ROLE "+role+" NOLOGIN").update();
+        try {
+            db.sql("GRANT USAGE ON SCHEMA public TO "+role).update();
+            db.sql("GRANT SELECT ON users,user_roles,role_permissions,user_permission_overrides,manufacturing_orders TO "+role).update();
+            db.sql("GRANT SELECT (id,target_kind,target_id,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files TO "+role).update();
+            UUID actor=UUID.fromString(admin.read(admin.call("GET","/auth/me",null,false),200).path("id").asText());
+            new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status->{
+                db.sql("SET LOCAL ROLE "+role).update();
+                // The database itself rejects SELECT * or any attempt to read content here.
+                var metadata=fileService.list(com.easyback.files.FileService.Kind.ORDER,UUID.fromString(fixture.order()),actor);
+                assertEquals(3,metadata.size()); assertTrue(metadata.stream().allMatch(f->f.sizeBytes()>2*1024*1024));
+            });
+        } finally {
+            db.sql("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "+role).update();
+            db.sql("REVOKE SELECT (id,target_kind,target_id,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files FROM "+role).update();
+            db.sql("REVOKE USAGE ON SCHEMA public FROM "+role).update();
+            db.sql("DROP ROLE "+role).update();
+        }
+        var listed=admin.call("GET","/files?kind=ORDER&targetId="+fixture.order(),null,false);
+        assertEquals(3,admin.read(listed,200).size()); assertTrue(listed.body().length()<4096);
+        assertFalse(listed.body().contains("\"content\""));
+        assertEquals(pdf,fixture.worker().client().call("GET","/files/"+file.path("id").asText(),null,false).body());
     }
     int catalogStatus(String method, String path, Object body) {
         try { return admin.call(method, path, body, true).statusCode(); } catch (Exception e) { throw new RuntimeException(e); }
