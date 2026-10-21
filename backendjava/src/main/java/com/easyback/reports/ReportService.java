@@ -22,7 +22,7 @@ public class ReportService {
     private boolean late(Instant actual,Instant due) { return (actual==null?clock.instant():actual).isAfter(due); }
     public record Filter(String q,String status,boolean late,boolean missing) {
         public boolean matches(Row row) {
-            return (row.code()+" "+row.title()+" "+row.machineSerial()).toLowerCase(Locale.ROOT).contains(q.trim().toLowerCase(Locale.ROOT))
+            return (row.code()+" "+com.easyback.localization.LocalizedText.searchText(row.title())+" "+row.machineSerial()).toLowerCase(Locale.ROOT).contains(q.trim().toLowerCase(Locale.ROOT))
                 && (status.isBlank() || status.equals("all") || row.status().equals(status))
                 && (!late || row.completionLate()) && (!missing || row.missing()>0);
         }
@@ -59,11 +59,12 @@ public class ReportService {
         return csv(from,to,new Filter("","",false,false));
     }
     public String csv(LocalDate from,LocalDate to,Filter filter) {
-        var out=new StringBuilder("\uFEFFCode,Title,Machine,Status,DueUTC,AssemblyUTC,CompletedUTC,DeliveredUTC,Required,Installed,Missing,OpenDefects,ExpectedMinutes,GrossShiftSeconds,NetWorkSeconds,UnconfirmedSessions,UntrackedTasks,AssemblyLate,CompletionLate,DeliveryLate\r\n");
+        var out=new StringBuilder("\uFEFF"+com.easyback.localization.LocalizedText.message("csvHeaders", "")+"\r\n");
         for(var r:overview(from,to,filter).orders()) {
-            Object[] values={r.code(),r.title(),r.machineSerial(),r.status(),r.deliveryAt(),r.assemblyCompletedAt(),r.completedAt(),r.deliveredAt(),r.required(),r.installed(),r.missing(),r.defects(),r.expectedMinutes(),r.time().grossSeconds(),r.time().netSeconds(),r.time().unconfirmedSessions(),r.untrackedTasks(),r.assemblyLate(),r.completionLate(),r.deliveryLate()};
+            Object[] values={r.code(),com.easyback.localization.LocalizedText.display(r.title()),r.machineSerial(),com.easyback.localization.LocalizedText.status(r.status()),r.deliveryAt(),r.assemblyCompletedAt(),r.completedAt(),r.deliveredAt(),r.required(),r.installed(),r.missing(),r.defects(),r.expectedMinutes(),r.time().grossSeconds(),r.time().netSeconds(),r.time().unconfirmedSessions(),r.untrackedTasks(),yesNo(r.assemblyLate()),yesNo(r.completionLate()),yesNo(r.deliveryLate())};
             out.append(String.join(",",Arrays.stream(values).map(ReportService::cell).toList())).append("\r\n");
         }
         return out.toString();
     }
+    private static String yesNo(boolean value) { return com.easyback.localization.LocalizedText.message(value?"yes":"no",Boolean.toString(value)); }
 }

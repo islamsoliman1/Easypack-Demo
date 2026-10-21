@@ -1,3 +1,4 @@
+import { translateDisplay } from './i18n';
 export type Model = { id: string; code: string; name: string; description: string; active: boolean; version: number };
 export type Shape = 'STANDARD' | 'RECTANGULAR' | 'ROUND';
 export type Part = Model & { kind: 'SERIALIZED_PIECE' | 'MEASURED_STOCK'; shape: Shape; stockUnit: 'PIECE' | 'LENGTH' | 'AREA'; lengthMm: number | null; widthMm: number | null; diameterMm: number | null; defaultInstallMinutes: number };
@@ -7,6 +8,6 @@ export type Bom = { id: string; modelId: string; machineId: string | null; revis
 export const shapeNames = { STANDARD: 'قياسية', RECTANGULAR: 'مستطيلة', ROUND: 'دائرية' };
 export function dimensions(p: Pick<Part, 'shape' | 'lengthMm' | 'widthMm' | 'diameterMm'>) {
   if (p.shape === 'STANDARD') return shapeNames.STANDARD;
-  return p.shape === 'ROUND' ? `${p.lengthMm} × Ø ${p.diameterMm} mm` : `${p.lengthMm} × ${p.widthMm} mm`;
+  return p.shape === 'ROUND' ? `${translateDisplay(p.lengthMm)} × Ø ${translateDisplay(p.diameterMm)} mm` : `${translateDisplay(p.lengthMm)} × ${translateDisplay(p.widthMm)} mm`;
 }
 export const codePattern = '[A-Za-z0-9]([A-Za-z0-9._]|/|-){0,63}';

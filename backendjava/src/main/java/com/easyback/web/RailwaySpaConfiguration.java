@@ -27,10 +27,11 @@ public class RailwaySpaConfiguration implements WebMvcConfigurer {
     private static final String ORDER = "/orders/{id:" + UUID + "}";
     private static final String OPERATION = "/operations/{id:" + UUID + "}";
     private static final String ASSEMBLY = "/machines/{id:" + UUID + "}/assembly";
+    private static final String MACHINE = "/machines/{id:" + UUID + "}";
     private static final Set<String> PAGES = Set.of("/", "/index.html", "/users", "/roles", "/machine-models",
         "/parts", "/machines", "/boms", "/orders", "/warehouse", "/preparations", "/raw-stock", "/tasks",
         "/defects", "/operations", "/operations/templates", "/shifts", "/reports", "/notifications");
-    private static final Pattern DETAILS = Pattern.compile("/(?:orders|operations)/" + UUID + "|/machines/" + UUID + "/assembly");
+    private static final Pattern DETAILS = Pattern.compile("/(?:orders|operations)/" + UUID + "|/machines/" + UUID + "(?:/assembly)?");
     // Vite assets only; dotfiles, traversal and source maps are never public.
     private static final Pattern ASSETS = Pattern.compile("/assets/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.(?:js|css|svg|png|jpg|jpeg|webp|avif|ico|woff2?|ttf)");
 
@@ -46,7 +47,7 @@ public class RailwaySpaConfiguration implements WebMvcConfigurer {
 
     @RequestMapping(method = {RequestMethod.GET, RequestMethod.HEAD}, value = {"/", "/index.html", "/users", "/roles",
         "/machine-models", "/parts", "/machines", "/boms", "/orders", "/warehouse", "/preparations", "/raw-stock",
-        "/tasks", "/defects", "/operations", "/operations/templates", "/shifts", "/reports", "/notifications", ORDER, OPERATION, ASSEMBLY})
+        "/tasks", "/defects", "/operations", "/operations/templates", "/shifts", "/reports", "/notifications", ORDER, OPERATION, ASSEMBLY, MACHINE})
     public ResponseEntity<Resource> index(HttpServletRequest request) throws IOException {
         var resource = new ClassPathResource("static/index.html");
         var response = ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.TEXT_HTML)

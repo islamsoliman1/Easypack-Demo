@@ -1,7 +1,10 @@
+import { formatDisplay } from './i18n';
+import { translateUi, translateDisplay, useLanguage, dateFormatter, getLocale, getDirection } from './i18n';
 import React, { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { CircleAlert, LoaderCircle, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { ApiError } from './api';
+import { LanguageToggle } from './LanguageToggle';
 
 const errors: Record<string, string> = {
   INVALID_NOTIFICATION_QUERY: 'عامل تصفية الإشعارات أو مؤشر الصفحة غير صالح.',
@@ -68,19 +71,27 @@ const errors: Record<string, string> = {
   REPORT_RANGE: 'اختر فترة تقرير صحيحة لا تتجاوز 367 يومًا.',
 };
 export function message(error: unknown) { return error instanceof ApiError ? errors[error.code] ?? 'تعذر تنفيذ الطلب. حاول مجددًا.' : 'تعذر الاتصال بالخادم. تحقق من الاتصال وحاول مجددًا.'; }
-export function Busy() { return <div className="state"><LoaderCircle className="spin" size={24} /><span>جارٍ التحميل</span></div>; }
-export function ErrorBox({ error }: { error: unknown }) { return error ? <div className="error" role="alert"><CircleAlert size={18} aria-hidden="true" /><span>{message(error)}</span></div> : null; }
+export function Busy() {
+  useLanguage(); return <div className="state"><LoaderCircle className="spin" size={24} /><span>{translateUi("جارٍ التحميل")}</span></div>; }
+export function ErrorBox({ error }: { error: unknown }) {
+  useLanguage(); return error ? <div className="error" role="alert"><CircleAlert size={18} aria-hidden="true" /><span>{formatDisplay(message(error))}</span></div> : null; }
 export function IconButton({ label, children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button type="button" className="icon-button" title={label} aria-label={label} {...props}>{children}</button>;
+  useLanguage();
+  return <button type="button" className="icon-button" title={formatDisplay(label)} aria-label={formatDisplay(label)} {...props}>{formatDisplay(children)}</button>;
 }
 export function Modal({ title, close, children }: { title: string; close: () => void; children: React.ReactNode }) {
+  useLanguage();
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { const el = dialog.current!; el.showModal(); return () => el.close(); }, []);
   return <dialog ref={dialog} className="modal" onCancel={e => { e.preventDefault(); close(); }} onClick={e => { if (e.target === e.currentTarget) close(); }}>
-    <header><h2>{title}</h2><IconButton label="إغلاق" onClick={close}><X size={20} /></IconButton></header>{children}
+    <header><h2>{formatDisplay(title)}</h2><LanguageToggle /><IconButton label={translateUi("إغلاق")} onClick={close}><X size={20} /></IconButton></header>
+    {getDirection() === 'ltr' && <p className="translation-note">Forms edit original record text. Reviewed translations appear in the preview; text without a supplied translation stays in its original language.</p>}
+    {formatDisplay(children)}
   </dialog>;
 }
 export function QueryError({ error, retry }: { error: unknown; retry: () => void }) {
-  return <div className="state"><ErrorBox error={error} /><button onClick={retry}><RefreshCw size={17} />إعادة المحاولة</button></div>;
+  useLanguage();
+  return <div className="state"><ErrorBox error={error} /><button onClick={retry}><RefreshCw size={17} />{translateUi("إعادة المحاولة")}</button></div>;
 }
-export function Denied() { return <div className="state"><ShieldCheck size={32} /><h1>غير مصرح بالدخول</h1><p>ليس لديك صلاحية عرض هذه الصفحة.</p><NavLink to="/">حسابي</NavLink></div>; }
+export function Denied() {
+  useLanguage(); return <div className="state"><ShieldCheck size={32} /><h1>{translateUi("غير مصرح بالدخول")}</h1><p>{translateUi("ليس لديك صلاحية عرض هذه الصفحة.")}</p><NavLink to="/">{translateUi("حسابي")}</NavLink></div>; }

@@ -1,0 +1,22 @@
+{
+  "تم إسناد مهمة إليك": "A task has been assigned to you",
+  "تم فتح طلب التصنيع": "Manufacturing order released",
+  "نواقص في طلب التصنيع": "Manufacturing order shortages",
+  "طلب تجهيز قطع": "Piece preparation requested",
+  "اكتمل تجهيز القطع": "Piece preparation completed",
+  "تم الإبلاغ عن قطعة معيبة": "Defective piece reported",
+  "قطعة معيبة جاهزة للإصلاح": "Defective piece ready for repair",
+  "قطعة مصلحة جاهزة للاستلام": "Repaired piece ready for receipt",
+  "الطلب جاهز لتجربة التشغيل": "Order ready for an operation trial",
+  "فشلت تجربة التشغيل": "Operation trial failed",
+  "تم إيقاف تجربة التشغيل": "Operation trial stopped",
+  "تغير تركيب الماكينة أثناء التجربة": "Machine configuration changed during the trial",
+  "اكتمل طلب التصنيع": "Manufacturing order completed",
+  "اقترب موعد التسليم": "Delivery deadline approaching",
+  "تأخر موعد التسليم": "Delivery overdue",
+  "مثال: مهمة تجميع": "Example: assembly task",
+  "مثال: طلب تجهيز": "Example: preparation request",
+  "مثال: بلاغ عيب": "Example: defect report",
+  "مثال: تجربة تشغيل": "Example: operation trial",
+  "مثال: طلب تصنيع": "Example: manufacturing order"
+}

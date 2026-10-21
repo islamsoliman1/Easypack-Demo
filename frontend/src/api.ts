@@ -1,3 +1,4 @@
+import { getLanguage, originalData, type Language } from './i18n';
 export type User = {
   id: string; email: string; displayName: string; active: boolean;
   mustChangePassword: boolean; version: number; roleIds: string[];
@@ -15,16 +16,17 @@ let csrfTask: Promise<void> | null = null;
 export function forgetSession() { access = null; }
 async function ensureCsrf(fresh = false) {
   if (csrf && !fresh) return;
-  if (!csrfTask) csrfTask = fetch('/api/v1/auth/csrf', { credentials: 'same-origin' })
+  if (!csrfTask) csrfTask = fetch('/api/v1/auth/csrf', { credentials: 'same-origin', headers: { 'Accept-Language': getLanguage() } })
     .then(async r => { if (!r.ok) throw new ApiError(r.status, 'NETWORK'); csrf = (await r.json()).token; })
     .finally(() => { csrfTask = null; });
   await csrfTask;
 }
-async function raw<T>(path: string, method = 'GET', body?: unknown, binary = false): Promise<T> {
+async function raw<T>(path: string, method = 'GET', body?: unknown, binary = false, language: Language = getLanguage()): Promise<T> {
   // Authentication may clear the CSRF cookie; cookie-authenticated requests need its current token.
   if (method !== 'GET') await ensureCsrf(['/auth/login', '/auth/refresh', '/auth/logout', '/auth/demo'].includes(path));
   const multipart = body instanceof FormData;
   const headers: Record<string, string> = multipart ? {} : { 'Content-Type': 'application/json' };
+  headers['Accept-Language'] = language;
   if (access) headers.Authorization = `Bearer ${access}`;
   if (method !== 'GET' && csrf) headers['X-XSRF-TOKEN'] = csrf;
   const response = await fetch(`/api/v1${path}`, {
@@ -34,7 +36,7 @@ async function raw<T>(path: string, method = 'GET', body?: unknown, binary = fal
     const problem = await response.json().catch(() => ({}));
     throw new ApiError(response.status, problem.code ?? 'NETWORK');
   }
-  const result = response.status === 204 ? undefined as T : binary ? await response.blob() as T : await response.json();
+  const result = response.status === 204 ? undefined as T : binary ? await response.blob() as T : originalData(await response.json()) as T;
   if (method !== 'GET' && !path.startsWith('/auth/') && !path.startsWith('/notifications/')) window.dispatchEvent(new Event('workflow-saved'));
   return result;
 }
@@ -62,14 +64,15 @@ export async function login(email: string, password: string) {
   access = session.accessToken; return session;
 }
 export async function api<T>(path: string, method = 'GET', body?: unknown, binary = false): Promise<T> {
-  try { return await raw<T>(path, method, body, binary); }
+  const language = getLanguage();
+  try { return await raw<T>(path, method, body, binary, language); }
   catch (e) {
     if (!(e instanceof ApiError) || e.status !== 401) throw e;
     try { await refreshSession(); }
     catch {
       forgetSession(); window.dispatchEvent(new Event('session-ended')); throw e;
     }
-    return raw<T>(path, method, body, binary);
+    return raw<T>(path, method, body, binary, language);
   }
 }
 export async function logout() {

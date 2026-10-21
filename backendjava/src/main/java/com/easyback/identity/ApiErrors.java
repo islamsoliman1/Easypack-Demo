@@ -22,6 +22,6 @@ public class ApiErrors {
         MethodArgumentTypeMismatchException.class})
     ResponseEntity<?> invalid(Exception e) { return error(400, "VALIDATION", "Check the submitted fields."); }
     private ResponseEntity<?> error(int status, String code, String message) {
-        return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
+        return ResponseEntity.status(status).body(Map.of("code", code, "message", com.easyback.localization.LocalizedText.message(code, message)));
     }
 }

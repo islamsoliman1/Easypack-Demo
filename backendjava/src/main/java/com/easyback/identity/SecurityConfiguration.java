@@ -109,7 +109,7 @@ public class SecurityConfiguration {
         return http.build();
     }
     static void write(HttpServletResponse response, int status, String code) throws IOException {
-        response.setStatus(status); response.setContentType("application/json");
-        response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"Request denied.\"}");
+        response.setStatus(status); response.setContentType("application/json"); response.setCharacterEncoding("UTF-8");
+        response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + com.easyback.localization.LocalizedText.message(code, "Request denied.") + "\"}");
     }
 }
