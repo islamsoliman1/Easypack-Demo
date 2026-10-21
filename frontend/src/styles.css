@@ -325,3 +325,12 @@ legend { padding-inline-end: 12px; font-size: 13px; font-weight: 600; }
 [dir="ltr"] .lucide-arrow-left, [dir="ltr"] .lucide-arrow-right { transform: scaleX(-1); }
 input[type="number"], input[type="email"], input[type="datetime-local"], input[type="date"], input[type="time"] { direction: ltr; }
 @media (max-width: 600px) { .topbar { gap: 8px; } .topbar > div { gap: 8px; } .modal > header { flex-wrap: wrap; gap: 8px; } }
+
+.password-field { display: flex; flex-direction: column; gap: 6px; }
+.password-input { position: relative; }
+.password-input[dir=ltr] > input { padding-right: 48px; }
+.password-input[dir=rtl] > input { padding-left: 48px; }
+.password-input > input::-ms-reveal { display: none; }
+.password-input > .password-toggle { position: absolute; inset-inline-end: 4px; top: 50%; transform: translateY(-50%); width: 36px; min-height: 36px; padding: 0; margin: 0; border: 0; background: transparent; color: var(--muted); }
+.password-input > .password-toggle:hover { background: var(--hover); color: var(--text); }
+.password-input > .password-toggle:focus-visible { outline-offset: 0; }
