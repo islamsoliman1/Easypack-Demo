@@ -27,14 +27,14 @@ public class DefectService {
         db.sql("SELECT id FROM catalog_guard WHERE id=1 FOR UPDATE").query(Integer.class).single();
     }
     private static final String CASES="""
-        SELECT d.*,r.order_id,r.position_code,t.occurrence,r.part_code,r.part_name,o.code order_code,o.machine_serial,
+        SELECT d.*,r.order_id,r.position_code,t.occurrence,r.part_id,r.part_code,r.part_name,o.code order_code,o.machine_id,o.machine_serial,
           s.serial_number,s.status piece_status,u.display_name reporter_name
         FROM defect_cases d JOIN assembly_tasks t ON t.id=d.task_id JOIN order_requirements r ON r.id=t.requirement_id
         JOIN manufacturing_orders o ON o.id=r.order_id JOIN stock_pieces s ON s.id=d.piece_id JOIN users u ON u.id=d.reported_by
         """;
     private static final RowMapper<Case> CASE=(r,n)->new Case(r.getObject("id",UUID.class),r.getObject("task_id",UUID.class),r.getObject("piece_id",UUID.class),
-        r.getObject("order_id",UUID.class),r.getString("order_code"),r.getString("machine_serial"),r.getString("position_code"),r.getInt("occurrence"),
-        r.getString("serial_number"),r.getString("part_code"),r.getString("part_name"),r.getObject("reported_by",UUID.class),r.getString("reporter_name"),
+        r.getObject("order_id",UUID.class),r.getString("order_code"),r.getObject("machine_id",UUID.class),r.getString("machine_serial"),r.getString("position_code"),r.getInt("occurrence"),
+        r.getString("serial_number"),r.getObject("part_id",UUID.class),r.getString("part_code"),r.getString("part_name"),r.getObject("reported_by",UUID.class),r.getString("reporter_name"),
         r.getString("reason"),r.getString("status"),r.getString("piece_status"),r.getLong("version"),r.getTimestamp("reported_at").toInstant());
     private Case load(UUID id) { return db.sql(CASES+" WHERE d.id=:id").param("id",id).query(CASE).optional().orElseThrow(DefectService::missing); }
     public List<Case> list(UUID actor,boolean all) { return db.sql(CASES+" WHERE :all OR d.reported_by=:actor ORDER BY d.reported_at DESC,d.id")

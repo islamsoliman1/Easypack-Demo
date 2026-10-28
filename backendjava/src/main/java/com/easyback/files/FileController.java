@@ -18,8 +18,9 @@ public class FileController {
     public record Version(@NotNull @PositiveOrZero Long version) {}
     private UUID actor(Authentication a) { return UUID.fromString(a.getName()); }
     @GetMapping public List<FileService.Metadata> list(@RequestParam FileService.Kind kind,@RequestParam UUID targetId,Authentication a) { return service.list(kind,targetId,actor(a)); }
+    @GetMapping("/visuals") public List<FileService.Metadata> visuals(@RequestParam FileService.Kind kind,@RequestParam UUID targetId,Authentication a) { return service.visuals(kind,targetId,actor(a)); }
     @PostMapping(consumes=MediaType.MULTIPART_FORM_DATA_VALUE) @ResponseStatus(HttpStatus.CREATED)
-    public FileService.Metadata upload(@RequestParam FileService.Kind kind,@RequestParam UUID targetId,@RequestPart MultipartFile file,Authentication a) throws IOException { return service.upload(kind,targetId,file,actor(a)); }
+    public FileService.Metadata upload(@RequestParam FileService.Kind kind,@RequestParam UUID targetId,@RequestParam(defaultValue="ATTACHMENT") FileService.Purpose purpose,@RequestPart MultipartFile file,Authentication a) throws IOException { return service.upload(kind,targetId,purpose,file,actor(a)); }
     @GetMapping("/{id}") public ResponseEntity<byte[]> download(@PathVariable UUID id,Authentication a) {
         var c=service.download(id,actor(a));
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(c.file().contentType())).cacheControl(CacheControl.noStore())

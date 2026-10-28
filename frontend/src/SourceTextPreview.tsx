@@ -1,6 +1,6 @@
 import { translateDisplay, useLanguage } from './i18n';
 
-const fields = new Set(['name','title','description','location','notes','label','criterion']);
+const fields = new Set(['name','displayName','title','description','location','notes','label','criterion']);
 export function SourceTextPreview({ values }: { values: unknown }) {
   const language = useLanguage();
   if (language !== 'en') return null;
@@ -16,6 +16,6 @@ export function SourceTextPreview({ values }: { values: unknown }) {
   visit(values);
   if (!entries.length) return null;
   return <section className="source-preview" aria-label="Reviewed English preview"><strong>Reviewed English preview · edit the original below</strong>
-    <dl>{entries.map((entry,index)=><div key={`${entry.field}-${index}`}><dt>{entry.field === 'criterion' ? 'Pass criterion' : entry.field[0].toUpperCase()+entry.field.slice(1)}</dt>
+    <dl>{entries.map((entry,index)=><div key={`${entry.field}-${index}`}><dt>{entry.field === 'criterion' ? 'Pass criterion' : entry.field === 'displayName' ? 'Display name' : entry.field[0].toUpperCase()+entry.field.slice(1)}</dt>
       <dd dir="auto">{entry.display}{entry.display === entry.source && /[\u0600-\u06ff]/.test(entry.source) && <small> · Translation not supplied</small>}</dd></div>)}</dl></section>;
 }

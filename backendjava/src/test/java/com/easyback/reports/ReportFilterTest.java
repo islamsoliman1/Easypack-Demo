@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ReportFilterTest {
     private ReportService.Row row(String code,String title,String status,boolean late,long missing) {
-        return new ReportService.Row(UUID.randomUUID(),code,title,"SERIAL-1",status,Instant.EPOCH,null,null,null,
+        return new ReportService.Row(UUID.randomUUID(),code,title,UUID.randomUUID(),"SERIAL-1",status,Instant.EPOCH,null,null,null,
             4,1,missing,0,BigDecimal.TEN,new WorkData.Total(0,0L,0),0,false,late,false);
     }
     @Test void mixedRowsUseConjunctiveSearchStatusLateAndMissing() {

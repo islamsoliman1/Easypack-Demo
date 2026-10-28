@@ -58,6 +58,31 @@ for (const path of ['/', '/orders', `/orders/${orders[0].id}`, '/operations/temp
 }
 console.log('PASS: seeded manufacturing workflow, reports, CSV and direct SPA routes');
 
+const dashboard = await json('/api/v1/factory-dashboard');
+assert.equal(dashboard.metrics.orders, orders.length);
+assert.equal(dashboard.states.reduce((sum, state) => sum + state.count, 0), orders.length);
+const machines = await json('/api/v1/machines');
+assert.equal(dashboard.metrics.machines, machines.filter(machine => machine.active).length);
+const machine = machines[0];
+for (const [kind, id] of [['MACHINE', machine.id], ['MODEL', machine.modelId], ['PART', (await json('/api/v1/parts'))[0].id]]) {
+  assert.ok(Array.isArray(await json('/api/v1/files/visuals?kind=' + kind + '&targetId=' + id)));
+}
+assert.ok(!session.user.permissions.includes('files.manage'));
+await csrfToken();
+const message = await json('/api/v1/machines/' + machine.id + '/chat', {method:'POST', body:{body:'Synthetic demo verification message'}});
+assert.ok((await json('/api/v1/machines/' + machine.id + '/chat')).messages.some(item => item.id === message.id));
+assert.ok(!(await json('/api/v1/machines/' + machines[1].id + '/chat')).messages.some(item => item.id === message.id));
+assert.equal((await request('/api/v1/machines/' + machine.id + '/chat/read', {method:'PUT',body:{through:message.id}})).status,204);
+assert.ok(Array.isArray(await json('/api/v1/machine-chat/unread')));
+const upload = new FormData();
+upload.append('file',new Blob(['solid demo\nendsolid demo'],{type:'model/stl'}),'demo.stl');
+const deniedUpload = await fetch(base + '/api/v1/files?kind=MODEL&targetId=' + machine.modelId + '&purpose=DESIGN', {
+  method:'POST', headers:{Authorization:'Bearer '+token,'X-XSRF-TOKEN':csrf,Cookie:[...cookies].map(([k,v])=>k+'='+v).join('; ')}, body:upload,
+});
+assert.equal(deniedUpload.status,403);
+console.log('PASS: factory totals, catalog visual access, persistent isolated machine chat and guest upload restriction');
+
+
 await csrfToken();
 const code=`VERIFY-${Date.now()}`;
 const created=await json('/api/v1/machine-models',{method:'POST',body:{code,name:'اختبار حفظ الديمو',description:'Synthetic verification fixture',active:true,version:0}});

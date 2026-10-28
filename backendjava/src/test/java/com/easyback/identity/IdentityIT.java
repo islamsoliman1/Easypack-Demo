@@ -81,6 +81,63 @@ class IdentityIT {
     JsonNode create(String email, List<String> roles) throws Exception {
         return admin.read(admin.call("POST", "/users", input(email, roles, Map.of()), true), 201);
     }
+    @Test void machineChatIsPersistentIsolatedPaginatedAndPermissionChecked() throws Exception {
+        String model=model("chat-model").path("id").asText();
+        String first=machine("chat-first",model).path("id").asText(), second=machine("chat-second",model).path("id").asText();
+        var user=admin.read(admin.call("POST","/users",input("chat-viewer@test.local",List.of(),Map.of("machines.view",true)),true),201);
+        db.sql("UPDATE users SET must_change_password=false WHERE email='chat-viewer@test.local'").update();
+        Client viewer=new Client(); viewer.login("chat-viewer@test.local",INITIAL);
+        String path="/machines/"+first+"/chat";
+        var sent=admin.read(admin.call("POST",path,Map.of("body","تصميم الماكينة جاهز\nReview drawing"),true),201);
+        long message=sent.path("id").asLong();
+        assertEquals("تصميم الماكينة جاهز\nReview drawing",sent.path("body").asText());
+        assertFalse(sent.path("senderName").asText().isBlank());
+        assertEquals(1,viewer.read(viewer.call("GET",path,null,false),200).path("messages").size());
+        assertEquals(0,viewer.read(viewer.call("GET","/machines/"+second+"/chat",null,false),200).path("messages").size());
+        assertEquals(1,viewer.read(viewer.call("GET","/machine-chat/unread",null,false),200).get(0).path("count").asLong());
+        assertEquals(0,admin.read(admin.call("GET","/machine-chat/unread",null,false),200).size());
+        viewer.read(viewer.call("PUT","/machines/"+second+"/chat/read",Map.of("through",message),true),404);
+        viewer.read(viewer.call("PUT",path+"/read",Map.of("through",message),true),204);
+        assertEquals(0,viewer.read(viewer.call("GET","/machine-chat/unread",null,false),200).size());
+        admin.read(admin.call("POST",path,Map.of("body","   "),true),400);
+        admin.read(admin.call("POST",path,Map.of("body","x".repeat(2001)),true),400);
+        Client cookieOnly=new Client();
+        cookieOnly.read(cookieOnly.call("POST",path,Map.of("body","No authentication or CSRF"),false),403);
+        for(int i=0;i<51;i++) admin.read(admin.call("POST",path,Map.of("body","Message "+i),true),201);
+        var page=viewer.read(viewer.call("GET",path,null,false),200);
+        assertEquals(50,page.path("messages").size()); assertTrue(page.path("hasMore").asBoolean());
+        var older=viewer.read(viewer.call("GET",path+"?before="+page.path("messages").get(0).path("id").asLong(),null,false),200);
+        assertEquals(2,older.path("messages").size()); assertFalse(older.path("hasMore").asBoolean());
+        assertEquals(message,older.path("messages").get(0).path("id").asLong());
+        long latest=page.path("messages").get(49).path("id").asLong();
+        viewer.read(viewer.call("PUT",path+"/read",Map.of("through",latest),true),204);
+        viewer.read(viewer.call("PUT",path+"/read",Map.of("through",message),true),204);
+        assertEquals(0,viewer.read(viewer.call("GET","/machine-chat/unread",null,false),200).size());
+        viewer.read(viewer.call("GET","/factory-dashboard",null,false),403);
+        db.sql("UPDATE user_permission_overrides SET allowed=false WHERE user_id=:id AND permission='machines.view'").param("id",UUID.fromString(user.path("id").asText())).update();
+        viewer.read(viewer.call("GET",path,null,false),403);
+        viewer.read(viewer.call("POST",path,Map.of("body","Forbidden"),true),403);
+        viewer.read(viewer.call("GET","/machine-chat/unread",null,false),403);
+        viewer.read(viewer.call("PUT",path+"/read",Map.of("through",latest),true),403);
+        Client anonymous=new Client(); anonymous.read(anonymous.call("GET",path,null,false),401);
+    }
+    @Test void factoryDashboardReflectsRealOrdersAndCurrentShortages() throws Exception {
+        var empty=admin.read(admin.call("GET","/factory-dashboard",null,false),200);
+        assertEquals(0,empty.path("metrics").path("orders").asLong());
+        var fixture=orderFixture();
+        var order=newOrder(orderInput("dashboard-order",fixture));
+        var draft=admin.read(admin.call("GET","/factory-dashboard",null,false),200);
+        assertEquals(1,draft.path("metrics").path("machines").asLong());
+        assertEquals(1,draft.path("metrics").path("orders").asLong());
+        assertEquals(0,draft.path("metrics").path("missing").asLong());
+        admin.read(admin.call("POST","/manufacturing-orders/"+order.path("id").asText()+"/release",Map.of("version",0),true),200);
+        var active=admin.read(admin.call("GET","/factory-dashboard",null,false),200).path("metrics");
+        assertEquals(1,active.path("active").asLong());
+        assertEquals(4,active.path("required").asLong());
+        assertEquals(4,active.path("missing").asLong());
+        assertEquals(4,active.path("unassigned").asLong());
+        assertEquals(0,active.path("installed").asLong());
+    }
     @Test void csrfAndWrongPasswordAreRejected() throws Exception {
         Client anonymous = new Client();
         anonymous.read(anonymous.call("POST", "/auth/login", Map.of("email", "admin@test.easyback.local", "password", "incorrect123!"), false), 403);
@@ -1182,6 +1239,109 @@ class IdentityIT {
         var outsider=assemblyWorker("no-files"); outsider.client().read(outsider.client().call("GET","/files/"+id,null,false),404);
         admin.read(admin.call("DELETE","/files/"+id,Map.of("version",1),true),409); admin.read(admin.call("DELETE","/files/"+id,Map.of("version",0),true),204); w.read(w.call("GET","/files/"+id,null,false),404);
     }
+    private static final String DESIGN_TRIANGLE="solid triangle\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid triangle\n";
+    HttpResponse<String> uploadVisual(Client client,String kind,String target,String purpose,String filename,byte[] bytes) throws Exception {
+        String boundary="easyback-visual-boundary";
+        var body=new java.io.ByteArrayOutputStream();
+        body.write(("--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\""+filename+"\"\r\nContent-Type: application/octet-stream\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+        body.write(bytes); body.write(("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8));
+        var request=HttpRequest.newBuilder(client.uri("/files?kind="+kind+"&targetId="+target+(purpose==null?"":"&purpose="+purpose)))
+            .header("Authorization","Bearer "+client.access).header("X-XSRF-TOKEN",client.csrf)
+            .header("Content-Type","multipart/form-data; boundary="+boundary).POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build();
+        return client.http.send(request,HttpResponse.BodyHandlers.ofString());
+    }
+    byte[] previewPng() throws Exception {
+        var out=new java.io.ByteArrayOutputStream(); javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(2,2,java.awt.image.BufferedImage.TYPE_INT_RGB),"png",out); return out.toByteArray();
+    }
+    JsonNode visuals(Client client,String kind,String target) throws Exception { return client.read(client.call("GET","/files/visuals?kind="+kind+"&targetId="+target,null,false),200); }
+    Set<String> visualIds(JsonNode files) { var ids=new HashSet<String>(); for(var file:files) ids.add(file.path("id").asText()); return ids; }
+    @Test void modelAndPartDesignsPersistAndMachinesInheritMissingRepresentations() throws Exception {
+        var f=orderFixture(); byte[] triangle=DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII);
+        var modelMesh=admin.read(uploadVisual(admin,"MODEL",f.model(),"DESIGN","machine.stl",triangle),201);
+        var modelPreview=admin.read(uploadVisual(admin,"MODEL",f.model(),"PREVIEW","machine.png",previewPng()),201);
+        byte[] step="ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;".getBytes(StandardCharsets.US_ASCII);
+        var source=admin.read(uploadVisual(admin,"MODEL",f.model(),"DESIGN","machine.step",step),201);
+        assertEquals("DESIGN",modelMesh.path("purpose").asText()); assertEquals("model/stl",modelMesh.path("contentType").asText());
+        assertEquals(DESIGN_TRIANGLE,admin.call("GET","/files/"+modelMesh.path("id").asText(),null,false).body());
+        var inherited=visuals(admin,"MACHINE",f.machine()); assertEquals(3,inherited.size());
+        for(var file:inherited) { assertEquals("MODEL",file.path("targetKind").asText()); assertEquals(f.model(),file.path("targetId").asText()); }
+        var machinePdf=admin.read(uploadVisual(admin,"MACHINE",f.machine(),null,"manual.pdf","%PDF-1.4\n%%EOF".getBytes(StandardCharsets.US_ASCII)),201);
+        assertTrue(visualIds(visuals(admin,"MACHINE",f.machine())).contains(modelPreview.path("id").asText()),"A PDF attachment must not hide the model image.");
+        var own=admin.read(uploadVisual(admin,"MACHINE",f.machine(),"PREVIEW","serial.png",previewPng()),201);
+        assertEquals(Set.of(own.path("id").asText(),modelMesh.path("id").asText(),source.path("id").asText(),machinePdf.path("id").asText()),visualIds(visuals(admin,"MACHINE",f.machine())));
+        admin.read(admin.call("DELETE","/files/"+own.path("id").asText(),Map.of("version",1),true),409);
+        admin.read(admin.call("DELETE","/files/"+own.path("id").asText(),Map.of("version",0),true),204);
+        assertTrue(visualIds(visuals(admin,"MACHINE",f.machine())).contains(modelPreview.path("id").asText()));
+        var partMesh=admin.read(uploadVisual(admin,"PART",f.part(),"DESIGN","part.stl",triangle),201);
+        var partPreview=admin.read(uploadVisual(admin,"PART",f.part(),"PREVIEW","part-preview.png",previewPng()),201);
+        var oldImage=admin.read(uploadVisual(admin,"PART",f.part(),null,"part.png",previewPng()),201);
+        assertEquals("ATTACHMENT",oldImage.path("purpose").asText());
+        assertEquals(partPreview.path("id").asText(),visuals(admin,"PART",f.part()).get(0).path("id").asText());
+        assertEquals(Set.of(partMesh.path("id").asText(),partPreview.path("id").asText(),oldImage.path("id").asText()),visualIds(visuals(admin,"PART",f.part())));
+        admin.read(admin.call("DELETE","/files/"+modelMesh.path("id").asText(),Map.of("version",0),true),204);
+        assertFalse(visualIds(visuals(admin,"MACHINE",f.machine())).contains(modelMesh.path("id").asText()));
+        admin.read(admin.call("GET","/files/"+modelMesh.path("id").asText(),null,false),404);
+        assertEquals(1L,db.sql("SELECT count(*) FROM resource_files WHERE id=:id AND deleted AND version=1").param("id",UUID.fromString(modelMesh.path("id").asText())).query(Long.class).single());
+        admin.read(uploadVisual(admin,"MODEL",f.model(),"DESIGN","machine.stl",triangle),201);
+    }
+    @Test void modelDesignAccessFollowsAssignedWorkAndNeverGrantsCatalogEditing() throws Exception {
+        var f=orderFixture(); String order=openStockOrder(f,"model-visibility").path("id").asText();
+        var assigned=assemblyWorker("model-assigned"); var outsider=assemblyWorker("model-outsider"); assignTask(assemblyTasks(order).get(0),assigned.id());
+        var modelFile=admin.read(uploadVisual(admin,"MODEL",f.model(),"DESIGN","model.stl",DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII)),201);
+        var machineFile=admin.read(uploadVisual(admin,"MACHINE",f.machine(),"PREVIEW","machine.png",previewPng()),201);
+        var partImage=admin.read(uploadVisual(admin,"PART",f.part(),"PREVIEW","part.png",previewPng()),201);
+        var partDesign=admin.read(uploadVisual(admin,"PART",f.part(),"DESIGN","part.stl",DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII)),201);
+        assertEquals(1,visuals(assigned.client(),"MODEL",f.model()).size()); assertEquals(2,visuals(assigned.client(),"MACHINE",f.machine()).size());
+        assertEquals(2,visuals(assigned.client(),"PART",f.part()).size()); assertFalse(visuals(assigned.client(),"MODEL",f.model()).get(0).path("canManage").asBoolean());
+        assertEquals(200,assigned.client().call("GET","/files/"+modelFile.path("id").asText(),null,false).statusCode());
+        String sibling=machine("model-unassigned-machine",f.model()).path("id").asText();
+        assigned.client().read(assigned.client().call("GET","/files/visuals?kind=MACHINE&targetId="+sibling,null,false),404);
+        String unrelated=model("model-unrelated").path("id").asText();
+        assigned.client().read(assigned.client().call("GET","/files/visuals?kind=MODEL&targetId="+unrelated,null,false),404);
+        for(String kind:List.of("MODEL","MACHINE","PART")) {
+            String target=switch(kind) { case "MODEL"->f.model(); case "MACHINE"->f.machine(); default->f.part(); };
+            outsider.client().read(outsider.client().call("GET","/files/visuals?kind="+kind+"&targetId="+target,null,false),404);
+        }
+        var fileManager=notificationUser("files-no-catalog-manage","catalog.view","files.manage");
+        fileManager.client().read(uploadVisual(fileManager.client(),"MODEL",f.model(),"DESIGN","blocked.stl",DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII)),403);
+        fileManager.client().read(fileManager.client().call("DELETE","/files/"+modelFile.path("id").asText(),Map.of("version",0),true),403);
+        var operator=notificationUser("visual-operator","operations.view","files.manage");
+        assertEquals(2,visuals(operator.client(),"MACHINE",f.machine()).size());
+        assertFalse(visuals(operator.client(),"MACHINE",f.machine()).get(0).path("canManage").asBoolean());
+        assertEquals(200,operator.client().call("GET","/files/"+machineFile.path("id").asText(),null,false).statusCode());
+        operator.client().read(operator.client().call("DELETE","/files/"+machineFile.path("id").asText(),Map.of("version",0),true),403);
+        var reporter=notificationUser("visual-reporter","reports.view"); assertEquals(2,visuals(reporter.client(),"MACHINE",f.machine()).size());
+        var warehouse=notificationUser("visual-warehouse","stock.view","files.manage");
+        assertEquals(2,visuals(warehouse.client(),"PART",f.part()).size());
+        assertFalse(visuals(warehouse.client(),"PART",f.part()).get(0).path("canManage").asBoolean());
+        assertEquals(200,warehouse.client().call("GET","/files/"+partImage.path("id").asText(),null,false).statusCode());
+        assertEquals(200,warehouse.client().call("GET","/files/"+partDesign.path("id").asText(),null,false).statusCode());
+        warehouse.client().read(warehouse.client().call("GET","/files/visuals?kind=MODEL&targetId="+f.model(),null,false),404);
+        warehouse.client().read(warehouse.client().call("GET","/files/visuals?kind=MACHINE&targetId="+f.machine(),null,false),404);
+        warehouse.client().read(uploadVisual(warehouse.client(),"PART",f.part(),"PREVIEW","denied.png",previewPng()),403);
+        warehouse.client().read(warehouse.client().call("DELETE","/files/"+partImage.path("id").asText(),Map.of("version",0),true),403);
+        var responsible=notificationUser("visual-responsible","orders.view-assigned");
+        db.sql("UPDATE manufacturing_orders SET responsible_id=:actor WHERE id=:id").param("actor",UUID.fromString(responsible.id())).param("id",UUID.fromString(order)).update();
+        assertEquals(1,visuals(responsible.client(),"MODEL",f.model()).size());
+        db.sql("UPDATE manufacturing_orders SET responsible_id=:actor WHERE id=:id").param("actor",UUID.fromString(f.owner())).param("id",UUID.fromString(order)).update();
+        responsible.client().read(responsible.client().call("GET","/files/"+modelFile.path("id").asText(),null,false),404);
+        assignTask(assemblyTasks(order).get(0),outsider.id());
+        assigned.client().read(assigned.client().call("GET","/files/"+modelFile.path("id").asText(),null,false),404);
+        assertEquals(1,visuals(outsider.client(),"MODEL",f.model()).size());
+    }
+    @Test void designUploadRejectsRenamedExecutablesBrokenMeshesAndNonImagePreviews() throws Exception {
+        String model=model("design-validation").path("id").asText();
+        byte[] executable="MZ this is not a design".getBytes(StandardCharsets.US_ASCII);
+        for(String name:List.of("model.glb","model.stl","model.step","model.sldprt","model.exe"))
+            admin.read(uploadVisual(admin,"MODEL",model,"DESIGN",name,executable),400);
+        admin.read(uploadVisual(admin,"MODEL",model,"PREVIEW","preview.png",executable),400);
+        admin.read(uploadVisual(admin,"MODEL",model,"PREVIEW","drawing.pdf","%PDF-1.4\n%%EOF".getBytes(StandardCharsets.US_ASCII)),400);
+        admin.read(uploadVisual(admin,"MODEL",model,"DESIGN","broken.stl",DESIGN_TRIANGLE.replace("endfacet","").getBytes(StandardCharsets.US_ASCII)),400);
+        assertEquals(0,visuals(admin,"MODEL",model).size());
+        admin.read(uploadVisual(admin,"MODEL",model,"DESIGN","valid.stl",DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII)),201);
+        admin.read(uploadVisual(admin,"MODEL",model,"DESIGN","duplicate.stl",DESIGN_TRIANGLE.getBytes(StandardCharsets.US_ASCII)),409);
+        admin.read(admin.call("GET","/files/visuals?kind=ORDER&targetId="+model,null,false),400);
+    }
     @Test void templatesAreVersionedAndTrialsKeepCopiedCriteria() throws Exception {
         var f=operationsFixture(); var p=new HashMap<String,Object>(Map.of("version",0,"name","Factory checklist","active",true,"checks",List.of(Map.of("label","Safety","criterion","Guard verified"))));
         var template=admin.read(admin.call("POST","/operations/templates",p,true),201); var start=startInput(operations(f.order())); start.put("checks",template.path("checks")); var trial=admin.read(admin.call("POST","/operations/orders/"+f.order()+"/start",start,true),200).path("trials").get(0);
@@ -1484,7 +1644,7 @@ class IdentityIT {
         try {
             db.sql("GRANT USAGE ON SCHEMA public TO "+role).update();
             db.sql("GRANT SELECT ON users,user_roles,role_permissions,user_permission_overrides,manufacturing_orders TO "+role).update();
-            db.sql("GRANT SELECT (id,target_kind,target_id,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files TO "+role).update();
+            db.sql("GRANT SELECT (id,target_kind,target_id,purpose,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files TO "+role).update();
             UUID actor=UUID.fromString(admin.read(admin.call("GET","/auth/me",null,false),200).path("id").asText());
             new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status->{
                 db.sql("SET LOCAL ROLE "+role).update();
@@ -1494,7 +1654,7 @@ class IdentityIT {
             });
         } finally {
             db.sql("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "+role).update();
-            db.sql("REVOKE SELECT (id,target_kind,target_id,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files FROM "+role).update();
+            db.sql("REVOKE SELECT (id,target_kind,target_id,purpose,filename,content_type,size_bytes,version,uploaded_at,uploaded_by,deleted) ON resource_files FROM "+role).update();
             db.sql("REVOKE USAGE ON SCHEMA public FROM "+role).update();
             db.sql("DROP ROLE "+role).update();
         }

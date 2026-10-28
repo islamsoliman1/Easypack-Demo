@@ -1,5 +1,6 @@
-import { formatDisplay } from './i18n';
-import { translateUi, translateDisplay, useLanguage, dateFormatter, getLocale, getDirection } from './i18n';
+import { SourceTextPreview } from './SourceTextPreview';
+import { FileButton } from './Files';
+import { translateUi, translateDisplay, formatDisplay, useLanguage, getLocale, getDirection } from './i18n';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -7,6 +8,8 @@ import { useQuery, localizedKey } from './localizedQuery';
 import { useForm } from 'react-hook-form';
 import { Check, CopyPlus, Pencil, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { api } from './api';
+import { ResourceVisual } from './CatalogMedia';
+import { SearchableSelect } from './SearchableSelect';
 import { can, useAuth } from './access';
 import { Busy, Denied, ErrorBox, IconButton, Modal, QueryError } from './ui';
 import { codePattern, dimensions, type Model, type Machine, type Part, type Bom, type BomItem } from './catalog';
@@ -65,15 +68,15 @@ function BomWorkspace() {
       {formatDisplay(templates.error && <QueryError error={templates.error} retry={() => void templates.refetch()} />)}</div>)}
     {formatDisplay(ownerQuery.isPending ? <Busy /> : ownerQuery.error ? <QueryError error={ownerQuery.error} retry={() => void ownerQuery.refetch()} /> : !owner ? <div className="state">{formatDisplay(machineId ? 'الماكينة غير موجودة' : 'لا يوجد موديل محدد')}</div>
       : boms.isPending ? <Busy /> : boms.error ? <QueryError error={boms.error} retry={() => void boms.refetch()} /> : !bom ? <div className="state">{formatDisplay(machineId ? 'لا توجد قائمة قطع لهذه الماكينة' : 'لا توجد قائمة مكونات لهذا الموديل')}</div> : <>
-        <div className="bom-summary"><div><h2>{formatDisplay(owner.name)} <span className={`badge ${translateDisplay(bom.status === 'PUBLISHED' ? 'active' : 'draft')}`}>{formatDisplay(bom.status === 'PUBLISHED' ? 'منشور' : 'مسودة')}</span></h2>
+        <div className="bom-summary"><div className="record-with-visual"><ResourceVisual kind={machineId ? "MACHINE" : "MODEL"} id={owner.id} name={owner.name} compact /><div><h2>{formatDisplay(owner.name)} <span className={`badge ${bom.status === 'PUBLISHED' ? 'active' : 'draft'}`}>{formatDisplay(bom.status === 'PUBLISHED' ? 'منشور' : 'مسودة')}</span></h2>
           {formatDisplay(selectedMachine && <div className="muted">{formatDisplay(selectedMachine.serialNumber)} · {formatDisplay(selectedMachine.modelName)}</div>)}
-          <div className="muted">{translateUi("الإصدار")}{' '}{formatDisplay(bom.revision)} · {formatDisplay(bom.items.length)} {translateUi("موضع ·")}{' '}{formatDisplay(bom.items.reduce((sum,i) => sum + i.quantity, 0))} {translateUi("قطعة ·")}{' '}{formatDisplay(Math.round(bom.items.reduce((sum,i) => sum + i.quantity * i.expectedInstallMinutes, 0) * 100) / 100)} {translateUi("دقيقة")}</div>
-          {formatDisplay(bom.publishedAt && <time className="muted" dateTime={bom.publishedAt}>{formatDisplay(new Date(bom.publishedAt).toLocaleString(getLocale()))}</time>)}</div>
+          <div className="muted">{translateUi("الإصدار")}{' '}{formatDisplay(bom.revision)} · {formatDisplay(bom.items.length)}{' '}{translateUi("موضع ·")}{' '}{formatDisplay(bom.items.reduce((sum,i) => sum + i.quantity, 0))}{' '}{translateUi("قطعة ·")}{' '}{formatDisplay(Math.round(bom.items.reduce((sum,i) => sum + i.quantity * i.expectedInstallMinutes, 0) * 100) / 100)}{' '}{translateUi("دقيقة")}</div>
+          {formatDisplay(bom.publishedAt && <time className="muted" dateTime={bom.publishedAt}>{formatDisplay(new Date(bom.publishedAt).toLocaleString(getLocale()))}</time>)}</div></div>
           {formatDisplay(writable && <div className="bom-actions"><button onClick={() => { setError(null); setEditing('new'); }} disabled={pending || parts.isPending || parts.isError}><Plus size={17} />{translateUi("إضافة مكون")}</button>
             <button className="primary" disabled={pending || !bom.items.length} onClick={() => { setError(null); setConfirmationVersion(bom.version); setConfirm('publish'); }}><Upload size={17} />{translateUi("نشر الإصدار")}</button></div>)}</div>
         {formatDisplay(parts.error && <QueryError error={parts.error} retry={() => void parts.refetch()} />)}
         <div className="table-wrap"><table className="bom-table"><thead><tr><th>{translateUi("الموضع")}</th><th>{translateUi("القطعة")}</th><th>{translateUi("المقاسات")}</th><th>{translateUi("الكمية")}</th><th>{translateUi("دقيقة / قطعة")}</th><th>{translateUi("ملاحظات")}</th>{formatDisplay(writable && <th>{translateUi("الإجراءات")}</th>)}</tr></thead><tbody>
-          {formatDisplay(bom.items.map(i => <tr key={i.id}><td><strong dir="ltr">{formatDisplay(i.positionCode)}</strong></td><td><strong>{formatDisplay(i.partName)}</strong><span className="record-code" dir="ltr">{formatDisplay(i.partCode)}</span></td>
+          {formatDisplay(bom.items.map(i => <tr key={i.id}><td><strong dir="ltr">{formatDisplay(i.positionCode)}</strong></td><td><div className="record-with-visual"><ResourceVisual kind="PART" id={i.partId} name={i.partName} compact /><div><strong>{formatDisplay(i.partName)}</strong><span className="record-code" dir="ltr">{formatDisplay(i.partCode)}</span><FileButton kind="PART" id={i.partId} name={i.partName} /></div></div></td>
             <td><span className="dimensions" dir={i.shape === 'STANDARD' ? getDirection() : 'ltr'}>{formatDisplay(dimensions(i))}</span></td><td>{formatDisplay(i.quantity)}</td><td>{formatDisplay(i.expectedInstallMinutes)}</td><td><span className="cell-notes">{formatDisplay(i.notes || '—')}</span></td>
             {formatDisplay(writable && <td><div className="row-actions"><IconButton label={formatDisplay(translateUi("تعديل الموضع {{v0}}", {v0: i.positionCode}))} disabled={pending} onClick={() => setEditing(i)}><Pencil size={17} /></IconButton>
               <IconButton label={formatDisplay(translateUi("حذف الموضع {{v0}}", {v0: i.positionCode}))} disabled={pending} onClick={() => { setError(null); setConfirmationVersion(bom.version); setConfirm(i); }}><Trash2 size={17} /></IconButton></div></td>)}</tr>))}
@@ -96,9 +99,11 @@ function BomItemForm({ bom, original, parts, saved, cancel }: { bom: Bom; origin
       const expectedInstallMinutes = Math.round(v.time * (unit === 'hours' ? 60 : 1) * 100) / 100;
       await saved(await api<Bom>(`/boms/${translateDisplay(bom.id)}/items${translateDisplay(original ? `/${translateDisplay(original.id)}` : '')}`, original ? 'PUT' : 'POST', { ...v, expectedInstallMinutes, version }));
     } catch (e) { setError(e); }
-  })}><ErrorBox error={error} /><label>{translateUi("كود الموضع")}<input {...form.register('positionCode')} pattern={codePattern} maxLength={40} required dir="ltr" /></label>
-    <label>{translateUi("القطعة")}<select aria-label={translateUi("القطعة")} {...form.register('partId')} required onChange={e => { form.setValue('partId', e.target.value); const p = parts.find(p => p.id === e.target.value); if (p) { form.setValue('time', p.defaultInstallMinutes); setUnit('minutes'); } }}>
-      <option value="">{translateUi("اختر القطعة")}</option>{formatDisplay(parts.filter(p => p.kind === 'SERIALIZED_PIECE' && (p.active || p.id === original?.partId)).map(p => <option key={p.id} value={p.id}>{formatDisplay(p.code)} · {formatDisplay(p.name)}{formatDisplay(p.active ? '' : ' (مؤرشف)')}</option>))}</select></label>
+  })}><SourceTextPreview values={form.watch()} /><ErrorBox error={error} /><label>{translateUi("كود الموضع")}<input {...form.register('positionCode')} pattern={codePattern} maxLength={40} required dir="ltr" /></label>
+    <label>{translateUi("القطعة")}<input type="hidden" {...form.register('partId', { required: true })} /><SearchableSelect label={translateUi("القطعة")} value={form.watch('partId')} required placeholder={translateUi("اختر القطعة")}
+      options={parts.filter(p => p.kind === 'SERIALIZED_PIECE' && (p.active || p.id === original?.partId)).map(p => ({ value: p.id, label: `${formatDisplay(p.code)} · ${formatDisplay(p.name)}${p.active ? '' : ` (${translateUi('مؤرشف')})`}`, keywords: p.description }))}
+      onChange={value => { form.setValue('partId', value, { shouldValidate: true }); const p = parts.find(p => p.id === value); if (p) { form.setValue('time', p.defaultInstallMinutes); setUnit('minutes'); } }} /></label>
+    {form.watch('partId') && <ResourceVisual kind="PART" id={form.watch('partId')} name={parts.find(p => p.id === form.watch('partId'))?.name ?? ''} compact />}
     <label>{translateUi("الكمية")}<input type="number" {...form.register('quantity', { valueAsNumber: true })} min="1" max="10000" step="1" required dir="ltr" /></label>
     <div className="form-grid"><label>{translateUi("زمن التركيب لكل قطعة")}<input type="number" {...form.register('time', { valueAsNumber: true })} min={unit === 'hours' ? 0.01 / 60 : 0.01} max={unit === 'hours' ? 9999999.99 / 60 : 9999999.99} step={unit === 'hours' ? 'any' : '0.01'} required dir="ltr" /></label>
       <label>{translateUi("وحدة الزمن")}<select aria-label={translateUi("وحدة الزمن")} value={unit} onChange={e => { const next = e.target.value; form.setValue('time', next === 'hours' ? form.getValues('time') / 60 : Math.round(form.getValues('time') * 60 * 100) / 100); setUnit(next); }}><option value="minutes">{translateUi("دقيقة")}</option><option value="hours">{translateUi("ساعة")}</option></select></label></div>

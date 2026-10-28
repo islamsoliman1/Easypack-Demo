@@ -1,3 +1,7 @@
+import { FactoryDashboardStats } from './FactoryDashboard';
+import { ResourceVisual } from './CatalogMedia';
+import { FileButton } from './Files';
+import { MachineChatButton, useChatUnread } from './MachineChat';
 import { formatDisplay } from './i18n';
 import { searchable } from './i18n';
 import { translateUi, translateDisplay, useLanguage, dateFormatter, getLocale, getDirection } from './i18n';
@@ -20,6 +24,7 @@ const refreshInterval = 15000;
 
 function useMachineOverview() {
   const { user } = useAuth();
+  const client = useQueryClient();
   const canReadMachines = can(user, 'machines.view');
   const canReadOrders = can(user, 'orders.view') || can(user, 'orders.view-assigned');
   const machines = useQuery({
@@ -30,10 +35,11 @@ function useMachineOverview() {
     queryKey: ['/manufacturing-orders'], queryFn: () => api<Order[]>('/manufacturing-orders'), enabled: canReadMachines && canReadOrders,
     refetchInterval: refreshInterval, staleTime: 0, refetchOnMount: 'always', refetchOnWindowFocus: 'always',
   });
-  const refresh = () => Promise.all([machines.refetch(), ...(canReadOrders ? [orders.refetch()] : [])]);
+  const unread = useChatUnread(canReadMachines);
+  const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ['factory-dashboard'] }), unread.refetch(), machines.refetch(), ...(canReadOrders ? [orders.refetch()] : [])]);
   const updatedAt = canReadOrders ? Math.min(machines.dataUpdatedAt, orders.dataUpdatedAt) : machines.dataUpdatedAt;
   return {
-    user, canReadMachines, canReadOrders, refresh, updatedAt,
+    user, unread, canReadMachines, canReadOrders, refresh, updatedAt,
     fetching: machines.isFetching || (canReadOrders && orders.isFetching),
     pending: machines.isPending || (canReadOrders && orders.isPending),
     error: machines.error ?? (canReadOrders ? orders.error : null),
@@ -63,15 +69,16 @@ function AssemblyProgress({ order, serial, visible }: { order: Order | undefined
   </div>;
 }
 
-function MachineCard({ overview, canReadOrders, now }: { overview: MachineOverview; canReadOrders: boolean; now: number }) {
+function MachineCard({ overview, canReadOrders, now, unread }: { overview: MachineOverview; canReadOrders: boolean; now: number; unread?: number }) {
   useLanguage();
   const { machine, currentOrder } = overview;
   const overdue = isOverdue(currentOrder, now);
-  return <Link to={`/machines/${translateDisplay(machine.id)}`} className={`machine-card${translateDisplay(!machine.active ? ' machine-card-archived' : '')}`} aria-label={formatDisplay(translateUi("عرض الماكينة {{v0}} · {{v1}}", {v0: machine.serialNumber, v1: machine.name}))}>
+  return <article className={`machine-card${translateDisplay(!machine.active ? ' machine-card-archived' : '')}`}>
     <div className="machine-card-top"><span className="machine-card-icon"><Factory size={23} /></span><div className="machine-card-badges">
       {formatDisplay(!machine.active && <span className="badge inactive">{translateUi("مؤرشفة")}</span>)}
       {formatDisplay(canReadOrders && <OrderStatus order={currentOrder} />)}
     </div></div>
+    <ResourceVisual kind="MACHINE" id={machine.id} name={machine.name} />
     <div className="machine-card-title"><span className="record-code" dir="ltr">{formatDisplay(machine.serialNumber)}</span><h3>{formatDisplay(machine.name)}</h3><p>{formatDisplay(machine.modelName)}</p></div>
     <div className="machine-card-location"><MapPin size={15} /><span>{formatDisplay(machine.location || 'لم يُحدد الموقع')}</span></div>
     <AssemblyProgress order={currentOrder} serial={machine.serialNumber} visible={canReadOrders} />
@@ -79,8 +86,9 @@ function MachineCard({ overview, canReadOrders, now }: { overview: MachineOvervi
       <span className="muted">{translateUi("المسؤول:")}{' '}{formatDisplay(currentOrder.responsibleName)}</span><time dateTime={currentOrder.deliveryAt}>{translateUi("التسليم:")}{' '}{formatDisplay(dateFormat.format(new Date(currentOrder.deliveryAt)))}</time>
       {formatDisplay(overdue && <span className="field-error">{translateUi("متأخر عن موعد التسليم")}</span>)}</>
       : <p className="muted">{formatDisplay(canReadOrders ? 'لا توجد طلبات ضمن نطاق العرض' : 'يمكنك عرض بيانات الماكينة')}</p>)}</div>
-    <div className="machine-card-footer"><span>{translateUi("عرض الماكينة والطلبات")}</span><ArrowLeft size={17} /></div>
-  </Link>;
+    <div className="factory-machine-actions"><MachineChatButton id={machine.id} name={machine.name} unread={unread} /><FileButton kind="MACHINE" id={machine.id} name={machine.name} /></div>
+    <Link to={`/machines/${machine.id}`} className="machine-card-footer"><span>{translateUi("عرض الماكينة والطلبات")}</span><ArrowLeft size={17} /></Link>
+  </article>;
 }
 
 export function DashboardPage() {
@@ -110,12 +118,8 @@ export function DashboardPage() {
         {formatDisplay(canCreateOrder && <button className="primary" onClick={() => setCreating('order')}><Plus size={17} />{translateUi("طلب جديد")}</button>)}</div></div>
     {formatDisplay(!can(user, 'orders.view') && <p className="notice" role="note">{formatDisplay(canReadOrders ? 'تظهر الماكينات كلها، والطلبات المسندة لك فقط. نسب التجميع حسب الطلبات المتاحة لك.' : 'تظهر بيانات الماكينات فقط حسب صلاحياتك.')}</p>)}
     {formatDisplay(data.pending ? <Busy /> : data.error ? <QueryError error={data.error} retry={() => void data.refresh()} /> : <>
-      <dl className="dashboard-metrics">
-        <div><dt><Factory size={18} />{translateUi("إجمالي الماكينات")}</dt><dd>{formatDisplay(overviews.length)}</dd><small>{formatDisplay(overviews.filter(({ machine }) => machine.active).length)} {translateUi("ماكينة نشطة")}</small></div>
-        {formatDisplay(canReadOrders && <><div><dt><Wrench size={18} />{translateUi("قيد التنفيذ")}</dt><dd>{formatDisplay(overviews.filter(({ currentOrder }) => isWorking(currentOrder)).length)}</dd><small>{translateUi("تجميع أو تجربة أو معالجة")}</small></div>
-          <div><dt><Check size={18} />{translateUi("مكتملة")}</dt><dd>{formatDisplay(overviews.filter(({ currentOrder }) => currentOrder?.status === 'COMPLETED').length)}</dd><small>{translateUi("اجتازت تجربة التشغيل")}</small></div>
-          <div><dt><ClipboardList size={18} />{translateUi("بانتظار العمل")}</dt><dd>{formatDisplay(overviews.filter(({ currentOrder }) => !currentOrder || ['DRAFT', 'CANCELLED'].includes(currentOrder.status)).length)}</dd><small>{translateUi("بدون طلب مفتوح")}</small></div></>)}
-      </dl>
+      <FactoryDashboardStats />
+      {data.unread.error && <QueryError error={data.unread.error} retry={() => void data.unread.refetch()} />}
       <div className="dashboard-section-heading"><div><h2>{translateUi("الماكينات")}<span className="count">{formatDisplay(visible.length)}</span></h2><p className="muted">{translateUi("اضغط على الماكينة لعرض تفاصيلها. النسبة تخص تجميع أحدث طلب غير ملغي.")}</p></div>
         <div className="dashboard-updated"><span className="dashboard-live-dot" aria-hidden="true" /><span>{translateUi("تحديث تلقائي كل 15 ثانية")}{' '}{formatDisplay(data.updatedAt > 0 && <> {translateUi("· آخر تحديث")}<time dateTime={new Date(data.updatedAt).toISOString()}>{formatDisplay(clockFormat.format(new Date(data.updatedAt)))}</time></>)}</span></div></div>
       <div className="toolbar"><label className="search"><Search size={18} /><input aria-label={translateUi("بحث الماكينات والطلبات")} placeholder={translateUi("بحث بالماكينة أو الموديل أو الطلب")} value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -123,7 +127,7 @@ export function DashboardPage() {
           {formatDisplay(canReadOrders && <><option value="working">{translateUi("قيد التنفيذ")}</option><option value="waiting">{translateUi("بانتظار العمل")}</option><option value="completed">{translateUi("مكتملة")}</option><option value="rework">{translateUi("تحتاج معالجة")}</option><option value="late">{translateUi("تسليم متأخر")}</option></>)}
           <option value="archived">{translateUi("مؤرشفة")}</option></select>
         <IconButton label={translateUi("تحديث لوحة الماكينات")} disabled={data.fetching} onClick={() => void data.refresh()}><RefreshCw size={18} className={data.fetching ? 'spin' : ''} /></IconButton></div>
-      {formatDisplay(visible.length > 0 ? <div className="machine-grid">{formatDisplay(visible.map(overview => <MachineCard key={overview.machine.id} overview={overview} canReadOrders={canReadOrders} now={now} />))}</div>
+      {formatDisplay(visible.length > 0 ? <div className="machine-grid">{formatDisplay(visible.map(overview => <MachineCard key={overview.machine.id} overview={overview} canReadOrders={canReadOrders} now={now} unread={data.unread.data?.find(item => item.machineId === overview.machine.id)?.count} />))}</div>
         : <div className="dashboard-empty"><Factory size={36} /><h2>{formatDisplay(overviews.length ? 'لا توجد ماكينات تطابق البحث' : 'أضف أول ماكينة للمصنع')}</h2><p className="muted">{formatDisplay(overviews.length ? 'جرّب تغيير البحث أو التصفية.' : 'تظهر الماكينات هنا فور إضافتها، وتُحدّث نسبة التجميع مع تقدم العمل.')}</p>
           {formatDisplay(overviews.length > 0 ? <button onClick={() => { setSearch(''); setFilter('all'); }}>{translateUi("مسح البحث والتصفية")}</button> : canCreateMachine && <button className="primary" onClick={() => setCreating('machine')}><Plus size={17} />{translateUi("ماكينة جديدة")}</button>)}</div>)}
     </>)}
@@ -151,6 +155,8 @@ export function MachinePage() {
     <div className="page-heading order-heading"><div><div className="eyebrow" dir="ltr">{formatDisplay(machine.serialNumber)}</div><h1>{formatDisplay(machine.name)}</h1></div><div className="bom-actions">
       <IconButton label={translateUi("تحديث الماكينة")} disabled={data.fetching} onClick={() => void data.refresh()}><RefreshCw size={18} /></IconButton>
       {formatDisplay(canCreateOrder && <button className="primary" onClick={() => setCreatingOrder(true)}><Plus size={17} />{translateUi("طلب جديد لهذه الماكينة")}</button>)}</div></div>
+    <ResourceVisual kind="MACHINE" id={machine.id} name={machine.name} />
+    <div className="factory-machine-actions"><MachineChatButton id={machine.id} name={machine.name} unread={data.unread.data?.find(item => item.machineId === machine.id)?.count} /><FileButton kind="MACHINE" id={machine.id} name={machine.name} /></div>
     <dl className="order-meta"><div><dt>{translateUi("الموديل")}</dt><dd>{formatDisplay(machine.modelName)}<span className="record-code" dir="ltr">{formatDisplay(machine.modelCode)}</span></dd></div><div><dt>{translateUi("الموقع")}</dt><dd>{formatDisplay(machine.location || 'لم يُحدد')}</dd></div>
       <div><dt>{translateUi("حالة الماكينة")}</dt><dd><span className={`badge ${translateDisplay(machine.active ? 'active' : 'inactive')}`}>{formatDisplay(machine.active ? 'نشطة' : 'مؤرشفة')}</span></dd></div>
       {formatDisplay(data.canReadOrders && <div><dt>{translateUi("أحدث طلب غير ملغي")}</dt><dd><OrderStatus order={currentOrder} />{formatDisplay(currentOrder && <span className="record-code" dir="ltr">{formatDisplay(currentOrder.code)}</span>)}</dd></div>)}</dl>
