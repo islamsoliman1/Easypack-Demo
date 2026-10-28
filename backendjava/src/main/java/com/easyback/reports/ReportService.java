@@ -13,7 +13,7 @@ import org.springframework.transaction.annotation.*;
 @Service
 @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
 public class ReportService {
-    public record Row(UUID id,String code,String title,String machineSerial,String status,Instant deliveryAt,Instant assemblyCompletedAt,Instant completedAt,Instant deliveredAt,
+    public record Row(UUID id,String code,String title,UUID machineId,String machineSerial,String status,Instant deliveryAt,Instant assemblyCompletedAt,Instant completedAt,Instant deliveredAt,
         long required,long installed,long missing,long defects,BigDecimal expectedMinutes,WorkData.Total time,long untrackedTasks,boolean assemblyLate,boolean completionLate,boolean deliveryLate) {}
     public record Summary(LocalDate from,LocalDate to,long total,long active,long ready,long rework,long completed,long delivered,long completionLate,long deliveryLate,long missing,long defects,List<Row> orders) {}
     private final JdbcClient db; private final WorkService work; private final Clock clock;
@@ -46,7 +46,7 @@ public class ReportService {
                 UUID id=r.getObject("id",UUID.class); var due=instant(r,"delivery_at"); var assembly=instant(r,"assembly_completed_at"); var completed=instant(r,"completed_at"); var delivered=instant(r,"delivered_at"); String status=r.getString("status"); boolean cancelled=status.equals("CANCELLED");
                 long untracked=r.getLong("untracked_tasks"); var time=work.orderTotal(id);
                 if(untracked>0) time=new WorkData.Total(time.grossSeconds(),null,time.unconfirmedSessions());
-                return new Row(id,r.getString("code"),r.getString("title"),r.getString("machine_serial"),status,due,assembly,completed,delivered,r.getLong("required"),r.getLong("installed"),cancelled?0:r.getLong("missing"),cancelled?0:r.getLong("defects"),r.getBigDecimal("expected_minutes"),time,untracked,!cancelled && late(assembly,due),!cancelled && late(completed,due),!cancelled && late(delivered,due));
+                return new Row(id,r.getString("code"),r.getString("title"),r.getObject("machine_id",UUID.class),r.getString("machine_serial"),status,due,assembly,completed,delivered,r.getLong("required"),r.getLong("installed"),cancelled?0:r.getLong("missing"),cancelled?0:r.getLong("defects"),r.getBigDecimal("expected_minutes"),time,untracked,!cancelled && late(assembly,due),!cancelled && late(completed,due),!cancelled && late(delivered,due));
             }).list().stream().filter(filter::matches).toList();
         return new Summary(from,to,rows.size(),rows.stream().filter(r->!Set.of("DRAFT","CANCELLED","COMPLETED").contains(r.status())).count(),rows.stream().filter(r->r.status().equals("AWAITING_TESTING")).count(),rows.stream().filter(r->r.status().equals("REWORK")).count(),rows.stream().filter(r->r.status().equals("COMPLETED")).count(),rows.stream().filter(r->r.deliveredAt()!=null).count(),rows.stream().filter(Row::completionLate).count(),rows.stream().filter(Row::deliveryLate).count(),rows.stream().mapToLong(Row::missing).sum(),rows.stream().mapToLong(Row::defects).sum(),rows);
     }

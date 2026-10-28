@@ -14,6 +14,7 @@ import { can, useAuth } from './access';
 import { Busy, Denied, ErrorBox, IconButton, Modal, QueryError } from './ui';
 import { codePattern, dimensions, type Bom, type BomItem, type Machine } from './catalog';
 import { OrderWarehouse } from './Warehouse';
+import { ResourceVisual } from './CatalogMedia';
 
 export type Order = {
   id: string; code: string; title: string; machineId: string; bomId: string; responsibleId: string; responsibleName: string;
@@ -42,7 +43,7 @@ function totals(items: BomItem[]) {
 function Requirements({ items }: { items: BomItem[] }) {
   useLanguage();
   return <div className="table-wrap" data-testid="order-requirements"><table className="bom-table"><thead><tr><th>{translateUi("الموضع")}</th><th>{translateUi("القطعة")}</th><th>{translateUi("المقاسات")}</th><th>{translateUi("الكمية")}</th><th>{translateUi("دقيقة / قطعة")}</th><th>{translateUi("ملاحظات")}</th></tr></thead><tbody>
-    {formatDisplay(items.map(i => <tr key={i.id}><td><strong dir="ltr">{formatDisplay(i.positionCode)}</strong></td><td><strong>{formatDisplay(i.partName)}</strong><span className="record-code" dir="ltr">{formatDisplay(i.partCode)}</span></td>
+    {formatDisplay(items.map(i => <tr key={i.id}><td><strong dir="ltr">{formatDisplay(i.positionCode)}</strong></td><td><div className="record-with-visual"><ResourceVisual kind="PART" id={i.partId} name={i.partName} compact /><div><strong>{formatDisplay(i.partName)}</strong><span className="record-code" dir="ltr">{formatDisplay(i.partCode)}</span></div></div></td>
       <td><span className="dimensions" dir={i.shape === 'STANDARD' ? getDirection() : 'ltr'}>{formatDisplay(dimensions(i))}</span></td><td>{formatDisplay(i.quantity)}</td><td>{formatDisplay(i.expectedInstallMinutes)}</td><td><span className="cell-notes">{formatDisplay(i.notes || '—')}</span></td></tr>))}
   </tbody></table></div>;
 }
@@ -62,8 +63,8 @@ export function OrdersPage() {
       <select aria-label={translateUi("حالة الطلب")} value={status} onChange={e => { setStatus(e.target.value); setPage(0); }}><option value="all">{translateUi("كل الحالات")}</option>{formatDisplay(Object.entries(labels).map(([v, label]) => <option key={v} value={v}>{formatDisplay(label)}</option>))}</select>
       <IconButton label={translateUi("تحديث الطلبات")} disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={18} /></IconButton></div>
     {formatDisplay(query.isPending ? <Busy /> : query.error ? <QueryError error={query.error} retry={() => void query.refetch()} /> : <><div className="table-wrap"><table><thead><tr><th>{translateUi("الطلب")}</th><th>{translateUi("الماكينة")}</th><th>{translateUi("المسؤول")}</th><th>{translateUi("التسليم · القاهرة")}</th><th>{translateUi("الحالة")}</th></tr></thead><tbody>
-      {formatDisplay(rows.slice(current * 10, current * 10 + 10).map(o => <tr key={o.id}><td><Link className="inline-link" to={`/orders/${translateDisplay(o.id)}`}><ClipboardList size={17} /><strong>{formatDisplay(o.title)}</strong></Link><span className="record-code" dir="ltr">{formatDisplay(o.code)}</span></td>
-        <td><strong>{formatDisplay(o.machineName)}</strong><span className="record-code" dir="ltr">{formatDisplay(o.machineSerial)}</span></td><td>{formatDisplay(o.responsibleName)}</td><td><time dateTime={o.deliveryAt}>{formatDisplay(dateFormat.format(new Date(o.deliveryAt)))}</time>
+      {formatDisplay(rows.slice(current * 10, current * 10 + 10).map(o => <tr key={o.id}><td><Link className="inline-link" to={`/orders/${o.id}`}><ClipboardList size={17} /><strong>{formatDisplay(o.title)}</strong></Link><span className="record-code" dir="ltr">{formatDisplay(o.code)}</span></td>
+        <td><div className="record-with-visual"><ResourceVisual kind="MACHINE" id={o.machineId} name={o.machineName} compact /><div><strong>{formatDisplay(o.machineName)}</strong><span className="record-code" dir="ltr">{formatDisplay(o.machineSerial)}</span></div></div></td><td>{formatDisplay(o.responsibleName)}</td><td><time dateTime={o.deliveryAt}>{formatDisplay(dateFormat.format(new Date(o.deliveryAt)))}</time>
           {formatDisplay(o.status !== 'CANCELLED' && !o.deliveredAt && new Date(o.deliveryAt).getTime() < Date.now() && <div className="field-error">{translateUi("متأخر")}</div>)}</td><td><Status value={o.status} />{formatDisplay(o.status === 'COMPLETED' && <span className="record-code">{formatDisplay(o.deliveredAt ? 'تم التسليم' : 'بانتظار التسليم الفعلي')}</span>)}</td></tr>))}
     </tbody></table>{formatDisplay(!rows.length && <div className="state">{translateUi("لا توجد طلبات")}</div>)}</div>
       <div className="pagination"><span>{formatDisplay(rows.length)} {translateUi("طلب")}</span><div><IconButton label={translateUi("الصفحة السابقة")} disabled={!current} onClick={() => setPage(current - 1)}><ChevronRight size={18} /></IconButton><span>{formatDisplay(current + 1)} / {formatDisplay(pages)}</span><IconButton label={translateUi("الصفحة التالية")} disabled={current === pages - 1} onClick={() => setPage(current + 1)}><ChevronLeft size={18} /></IconButton></div></div></>)}
@@ -98,7 +99,7 @@ function OrderDetail({ id }: { id: string }) {
       {formatDisplay(!['CANCELLED', 'TESTING', 'COMPLETED'].includes(order.status) && global && can(user, 'orders.cancel') && <button onClick={() => { setError(null); setReason(''); setAction({ kind: 'cancel', version: order.version }); }}><X size={17} />{translateUi("إلغاء الطلب")}</button>)}
     </div></div>
     {formatDisplay(notice && <div className="notice" role="status"><Check size={17} />{formatDisplay(notice)}</div>)}
-    <dl className="order-meta"><div><dt>{translateUi("الحالة")}</dt><dd><Status value={order.status} /></dd></div><div><dt>{translateUi("الماكينة")}</dt><dd>{formatDisplay(order.machineName)}<span className="record-code" dir="ltr">{formatDisplay(order.machineSerial)}</span></dd></div>
+    <dl className="order-meta"><div><dt>{translateUi("الحالة")}</dt><dd><Status value={order.status} /></dd></div><div><dt>{translateUi("الماكينة")}</dt><dd className="record-with-visual"><ResourceVisual kind="MACHINE" id={order.machineId} name={order.machineName} compact /><div>{formatDisplay(order.machineName)}<span className="record-code" dir="ltr">{formatDisplay(order.machineSerial)}</span></div></dd></div>
       <div><dt>{translateUi("الموديل")}</dt><dd>{formatDisplay(order.modelName)}</dd></div><div><dt>{translateUi("المسؤول")}</dt><dd>{formatDisplay(order.responsibleName)}</dd></div>
       <div><dt>{translateUi("موعد التسليم · القاهرة")}</dt><dd><time dateTime={order.deliveryAt}>{formatDisplay(dateFormat.format(new Date(order.deliveryAt)))}</time></dd></div><div><dt>{translateUi("إصدار قطع الماكينة")}</dt><dd>{formatDisplay(order.bomRevision)}</dd></div>
       {formatDisplay(order.openedAt && <div><dt>{translateUi("فتح الطلب · القاهرة")}</dt><dd>{formatDisplay(dateFormat.format(new Date(order.openedAt)))}</dd></div>)}

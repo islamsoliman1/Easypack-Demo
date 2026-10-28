@@ -39,6 +39,11 @@ Run the commands below from the directory containing this README.
 - **Work tracking:** work calendars, shifts, breaks, and task work sessions.
 - **Dashboards and reports:** searchable machine cards, order status and assembly
   progress, management summaries, CSV export, and printable reports.
+- **Factory overview and machine chat:** live all-time statistics, state distribution,
+  shortages, defects and per-machine conversations using the shared demo identity.
+- **Catalog designs:** card previews, STL/GLB 3D viewing, model-to-machine inheritance,
+  and searchable catalog selectors. Visitors can view existing files; uploads and
+  deletion remain restricted.
 - **In-app notifications:** persistent workflow alerts, links to related records,
   read/unread states, and scheduled delivery reminders.
 - **Bilingual interface:** Arabic/English switching, RTL/LTR layouts, localized

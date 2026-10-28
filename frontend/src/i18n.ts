@@ -5,6 +5,8 @@ import content from './demo-content.json';
 import systemContent from './system-content.json';
 import notificationContent from './notification-content.json';
 import notificationUi from './notifications/translations.json';
+import factoryUi from './factory-translations.json';
+import catalogMediaUi from './catalog-media-translations.json';
 
 export type Language = 'ar' | 'en';
 function initialLanguage(): Language {
@@ -12,7 +14,7 @@ function initialLanguage(): Language {
 }
 const reviewedContent = { ...content, ...notificationContent };
 const englishSources: Record<string,string> = { ...Object.fromEntries(Object.entries(reviewedContent).map(([ar,en])=>[en,ar])), ...systemContent };
-const english: Record<string, string> = { ...translations, ...notificationUi, ...reviewedContent, ...Object.fromEntries(Object.keys(englishSources).map(key=>[key,key])) };
+const english: Record<string, string> = { ...translations, ...notificationUi, ...factoryUi, ...catalogMediaUi, ...reviewedContent, ...Object.fromEntries(Object.keys(englishSources).map(key=>[key,key])) };
 const arabic = { ...Object.fromEntries(Object.keys(english).map(key => [key, key])), ...englishSources };
 void i18next.use(initReactI18next).init({ lng: initialLanguage(), fallbackLng: 'ar', supportedLngs: ['ar', 'en'],
   resources: { ar: { translation: arabic }, en: { translation: english } }, keySeparator: false, nsSeparator: false,
